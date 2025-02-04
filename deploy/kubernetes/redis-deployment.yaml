@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+      annotations:
+        linkerd.io/inject: enabled
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 999
+        runAsNonRoot: true
+      containers:
+      - name: redis
+        image: redis:alpine
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        args:
+        - "--requirepass"
+        - "$(REDIS_PASSWORD)"
+        - "--maxmemory"
+        - "200mb"
+        - "--maxmemory-policy"
+        - "allkeys-lru"
+        - "--io-threads"
+        - "4"
+        - "--network-compression-threads"
+        - "2"
+        - "--no-appendfsync-on-rewrite"
+        - "yes"
+        - "--aof-use-rdb-preamble"
+        - "yes"
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-secret
+              key: password
+        - name: MALLOC_ARENA_MAX  # Memory optimization
+          value: "2"
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - mountPath: /data
+          name: redis-data
+        startupProbe:
+          tcpSocket:
+            port: 6379
+          periodSeconds: 10
+          failureThreshold: 30
+        readinessProbe:
+          exec:
+            command: ["/bin/sh", "-c", "redis-cli -a $REDIS_PASSWORD ping"]
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        livenessProbe:
+          exec:
+            command: 
+            - /bin/sh
+            - -c
+            - redis-cli -a $REDIS_PASSWORD ping
+          initialDelaySeconds: 15
+          periodSeconds: 20
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-backup-data

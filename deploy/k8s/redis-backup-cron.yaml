@@ -1,0 +1,123 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    backup.kubernetes.io/deltas: "daily=7,weekly=4,monthly=6"
+spec:
+  schedule: "0 */6 * * *" # Every 6 hours
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      backoffLimit: 2
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: redis-backup
+              image: redis:7.0-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+
+                  # Enhanced locking mechanism
+                  LOCK_KEY="backup_lock:$(date +%Y%m%d)"
+                  if ! redis-cli -h ${REDIS_HOST} SET $LOCK_KEY $HOSTNAME NX EX 7200; then
+                    echo "Backup already in progress or lock exists"
+                    exit 1
+                  fi
+
+                  # Enhanced error handling
+                  cleanup() {
+                    redis-cli -h ${REDIS_HOST} DEL $LOCK_KEY
+                    rm -rf ${TEMP_DIR}
+                    if [ $? -eq 0 ]; then
+                      echo "backup_cleanup_success 1" > /tmp/metrics
+                    else
+                      echo "backup_cleanup_failure 1" > /tmp/metrics
+                    fi
+                  }
+                  trap cleanup EXIT
+
+                  trap 'echo "Backup failed"; exit 1' ERR INT TERM
+
+                  # Improved health checks
+                  if ! timeout 5s redis-cli -h ${REDIS_HOST} INFO | grep -q "role:master"; then
+                    echo "Redis not ready or not master, aborting backup"
+                    exit 1
+                  fi
+
+                  # Use temporary directory for processing
+                  TEMP_DIR=$(mktemp -d)
+                  trap 'rm -rf ${TEMP_DIR}' EXIT
+
+                  # Perform backup with improved compression
+                  timeout 30m redis-cli -h ${REDIS_HOST} -p ${REDIS_PORT} --rdb ${TEMP_DIR}/dump.rdb
+
+                  # Better compression and encryption
+                  gpg --symmetric --cipher-algo AES256 --batch --passphrase "${BACKUP_KEY}" \
+                      --compress-algo zlib -o ${TEMP_DIR}/dump.rdb.gpg ${TEMP_DIR}/dump.rdb
+
+                  mv ${TEMP_DIR}/dump.rdb.gpg /backup/dump-$(date +%Y%m%d-%H%M%S).rdb.gpg
+
+                  # Calculate and store checksum
+                  sha256sum /backup/dump-$(date +%Y%m%d-%H%M%S).rdb.gpg > /backup/dump-$(date +%Y%m%d-%H%M%S).rdb.gpg.sha256
+
+                  # Enhanced metrics
+                  echo "backup_success_timestamp $(date +%s)" > /tmp/metrics
+                  echo "backup_size_bytes $(stat -f%z /backup/*.gpg | sort -n | tail -1)" >> /tmp/metrics
+                  echo "backup_compression_ratio $(echo "scale=2; $(stat -f%z ${TEMP_DIR}/dump.rdb) / $(stat -f%z /backup/*.gpg | sort -n | tail -1)" | bc)" >> /tmp/metrics
+                  echo "backup_completion_time $(date +%s)" >> /tmp/metrics
+
+                  # Upload metrics to Prometheus
+                  curl -s -XPOST http://localhost:9091/metrics/job/redis_backup < /tmp/metrics
+
+                  # Add backup validation
+                  if ! redis-cli --pass ${BACKUP_KEY} -h ${REDIS_HOST} PING; then
+                    echo "Backup validation failed"
+                    exit 1
+                  fi
+
+                  # Backup rotation
+                  find /backup -name "dump-*.rdb.gpg" -mtime +7 -delete
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              ports:
+                - containerPort: 9091
+                  name: metrics
+              volumeMounts:
+                - name: backup-volume
+                  mountPath: /backup
+              env:
+                - name: REDIS_HOST
+                  valueFrom:
+                    configMapKeyRef:
+                      name: redis-backup-config
+                      key: REDIS_HOST
+                - name: BACKUP_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: redis-backup-secret
+                      key: backup-key
+          volumes:
+            - name: backup-volume
+              persistentVolumeClaim:
+                claimName: redis-backup-data
+          restartPolicy: OnFailure

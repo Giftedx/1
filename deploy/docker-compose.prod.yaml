@@ -1,0 +1,184 @@
+version: '3.8'
+services:
+  discord-media-bot:
+    build: 
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "9090:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=production
+      - DD_ENV=production
+      - DD_SERVICE=media-bot
+      - DD_VERSION=${APP_VERSION:-1.0.0}
+      - DD_PROFILING_ENABLED=true
+      - DD_APM_ENABLED=true
+      - DD_LOGS_INJECTION=true
+      - OTEL_EXPORTER_JAEGER_AGENT_HOST=jaeger
+      - OTEL_SAMPLER_TYPE=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=0.1
+      - REDIS_POOL_MIN_SIZE=5
+      - REDIS_POOL_MAX_SIZE=20
+      - REDIS_IDLE_TIMEOUT=300
+      - GOMAXPROCS=2
+      - MALLOC_ARENA_MAX=2
+      - NODE_OPTIONS=--max-old-space-size=1536 --max-semi-space-size=192
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=0.1
+      - REDIS_POOL_SIZE=50
+      - REDIS_MIN_IDLE=10
+      - REDIS_COMPRESSION_ENABLED=true
+      - REDIS_COMPRESSION_THRESHOLD=1024
+      - OTEL_EXPORTER_OTLP_COMPRESSION=gzip
+      - OTEL_BSP_MAX_QUEUE_SIZE=2048
+      - OTEL_BSP_SCHEDULE_DELAY=1000
+      # Performance optimizations
+      - MALLOC_TRIM_THRESHOLD_=131072
+      - PYTHONMALLOC=malloc
+      - PYTHONUNBUFFERED=1
+      - PYTHONHASHSEED=random
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - REDIS_DECODE_RESPONSES=true
+      # Enhanced monitoring
+      - DD_TRACE_ANALYTICS_ENABLED=true
+      - DD_TRACE_HEADER_TAGS=*
+      - DD_PROFILING_HEAP_ENABLED=true
+      - OTEL_METRIC_EXPORT_INTERVAL=10000
+    deploy:
+      resources:
+        limits:
+          cpus: '3'
+          memory: 3G
+        reservations:
+          cpus: '1.5'
+          memory: 1.5G
+          devices:
+            - capabilities: [gpu]
+              count: 1
+              driver: nvidia
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        monitor: 180s
+        failure_action: rollback
+        max_failure_ratio: 0.1
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+        failure_action: pause
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      placement:
+        constraints:
+          - node.role == worker
+          - node.labels.app == media
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - app-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "10"
+        compress: "true"
+        tag: "{{.Name}}/{{.ID}}"
+        labels: "production,media-bot"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=default
+    cpus: '2'
+    mem_limit: 2G
+    memswap_limit: 0
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+  redis:
+    image: redis:7.0-alpine
+    command: >
+      redis-server 
+      --requirepass ${REDIS_PASSWORD}
+      --maxclients 10000
+      --tcp-keepalive 60
+      --appendonly yes
+      --appendfsync everysec
+      --no-appendfsync-on-rewrite yes
+      --auto-aof-rewrite-percentage 100
+      --auto-aof-rewrite-min-size 64mb
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --stop-writes-on-bgsave-error no
+      --rdb-save-incremental-fsync yes
+      --aof-use-rdb-preamble yes
+      --activedefrag yes
+      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-upper 30
+      --active-defrag-cycle-min 25
+      --active-defrag-cycle-max 75
+      --lazyfree-lazy-eviction yes
+      --lazyfree-lazy-expire yes
+      --lazyfree-lazy-server-del yes
+      --replica-lazy-flush yes
+      --io-threads 4
+      --io-threads-do-reads yes
+      --maxmemory-samples 10
+      --active-expire-effort 10
+      --set-proc-title yes
+      --tcp-keepalive 300
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --jemalloc-bg-thread yes
+      --dynamic-hz yes
+      --latency-tracking yes
+      --latency-monitoring-threshold 100
+    volumes:
+      - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+      update_config:
+        parallelism: 1
+        delay: 10s
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - app-network
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge

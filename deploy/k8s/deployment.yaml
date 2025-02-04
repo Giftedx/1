@@ -1,0 +1,272 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: media-bot
+  annotations:
+    linkerd.io/inject: enabled
+    sidecar.istio.io/inject: "true"
+    fluentbit.io/parser: "json"
+spec:
+  replicas: 3
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: media-bot
+  template:
+    metadata:
+      labels:
+        app: media-bot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        # Add rate limiting
+        nginx.ingress.kubernetes.io/rate-limit-rpm: "300"
+        nginx.ingress.kubernetes.io/enable-ratelimit: "true"
+        # Add circuit breaker
+        linkerd.io/failure-accrual: "10"
+        linkerd.io/failure-reset-time: "30s"
+        linkerd.io/proxy-log-level: "warn,linkerd=info"
+        sidecar.istio.io/proxyCPU: "100m"
+        sidecar.istio.io/proxyMemory: "128Mi"
+        datadog.com/tags: "env:production,service:media-bot"
+        datadog.com/enable-apm: "true"
+        # Add pod disruption cost
+        controller.kubernetes.io/pod-disruption-cost: "100"
+        # Add linkerd retry configuration
+        config.linkerd.io/proxy-retry-timeout: "60s"
+        config.linkerd.io/proxy-retry-max: "5"
+        vault.hashicorp.com/agent-inject: "true"
+        resilience4j.io/retry-period: "1s"
+        resilience4j.io/retry-max-attempts: "3"
+        resilience4j.io/circuit-breaker-wait-duration: "30s"
+        # Enhanced monitoring
+        datadog.com/enable-metrics: "true"
+        datadog.com/enable-profiling: "true"
+        prometheus.io/path: "/metrics"
+        linkerd.io/proxy-memory-limit: "256Mi"
+        vault.hashicorp.com/agent-limits-cpu: "100m"
+        vault.hashicorp.com/agent-limits-memory: "128Mi"
+    spec:
+      serviceAccountName: media-bot-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+        sysctls:
+        - name: net.ipv4.tcp_keepalive_time
+          value: "60"
+        - name: net.core.somaxconn
+          value: "65535"
+      initContainers:
+      - name: init-redis
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z redis 6379; do echo waiting for redis; sleep 2; done;']
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: media-bot
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: media-bot
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: media-bot
+              topologyKey: kubernetes.io/hostname
+      priorityClassName: high-priority
+      terminationGracePeriodSeconds: 60
+      tolerations:
+      - key: "app"
+        operator: "Equal"
+        value: "media-bot"
+        effect: "NoSchedule"
+      containers:
+      - name: media-bot
+        image: your-registry/media-app:1.0.0
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+          seLinuxOptions:
+            level: "s0:c123,c456"
+          procMount: Default
+        envFrom:
+        - secretRef:
+            name: media-secrets
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: RATE_LIMIT_RPM
+          value: "300"
+        - name: CIRCUIT_BREAKER_THRESHOLD
+          value: "0.5"
+        - name: OTEL_SERVICE_NAME
+          value: "media-bot"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector:4317"
+        - name: GOGC
+          value: "75"
+        - name: GOMAXPROCS
+          value: "2"
+        - name: DD_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: DD_TRACE_SAMPLE_RATE
+          value: "1"
+        - name: REDIS_POOL_SIZE
+          value: "30"
+        - name: REDIS_POOL_TIMEOUT
+          value: "15"
+        - name: DD_PROFILING_ENABLED
+          value: "true"
+        - name: DD_RUNTIME_METRICS_ENABLED
+          value: "true"
+        # Add connection pooling optimization
+        - name: REDIS_MAX_RETRIES
+          value: "3"
+        - name: REDIS_RETRY_BACKOFF
+          value: "100"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.name=media-bot,environment=production"
+        - name: MALLOC_ARENA_MAX
+          value: "2"
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=768"
+        - name: OTEL_TRACES_SAMPLER
+          value: "parentbased_traceidratio"
+        - name: OTEL_TRACES_SAMPLER_ARG
+          value: "0.1"
+        - name: OTEL_EXPORTER_OTLP_COMPRESSION
+          value: "gzip"
+        # Enhanced environment configuration
+        - name: REDIS_POOL_CONFIG
+          value: '{"maxsize":50,"minsize":10,"timeout":30}'
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "deployment.environment=production,service.version=${APP_VERSION}"
+        - name: MALLOC_ARENA_MAX
+          value: "2"
+        ports:
+        - containerPort: 9090
+        - containerPort: 4317
+          name: otlp
+        resources:
+          requests:
+            memory: "1.5Gi"
+            cpu: "750m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "2Gi"
+            cpu: "2"
+            ephemeral-storage: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 2
+          successThreshold: 2
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: 9090
+          failureThreshold: 20
+          periodSeconds: 15
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh", "-c", "echo Starting application metrics collection"]
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 10 && kill -TERM 1"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: otel-config
+          mountPath: /etc/otel
+        - name: datadog-apm
+          mountPath: /var/run/datadog
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: otel-config
+        configMap:
+          name: otel-agent-config
+      - name: datadog-apm
+        hostPath:
+          path: /var/run/datadog
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: media-bot-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: media-bot
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: media-bot-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: media-bot
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

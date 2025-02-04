@@ -1,0 +1,77 @@
+version: '3.8'
+services:
+  discord-media-bot:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=default
+    ports:
+      - "127.0.0.1:9090:9090"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=info
+      - NODE_ENV=development
+      - OTEL_TRACES_SAMPLER=parentbased_traceidratio
+      - OTEL_TRACES_SAMPLER_ARG=1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    networks:
+      app-network:
+        ipv4_address: 172.28.0.2
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.0-alpine
+    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+    sysctls:
+      net.core.somaxconn: 1024
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      app-network:
+        ipv4_address: 172.28.0.3
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
+    driver_opts:
+      com.docker.network.bridge.name: app_net
+      com.docker.network.driver.mtu: 1500

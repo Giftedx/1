@@ -1,0 +1,82 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: redis-backup-storage
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  encrypted: "true"
+  kmsKeyId: "${KMS_KEY_ID}"
+  iops: "4000"
+  throughput: "250"
+  fsType: "ext4"
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+mountOptions:
+  - noatime
+  - nodiratime
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-backup-data
+  annotations:
+    backup.velero.io/backup-volumes: data
+spec:
+  storageClassName: redis-backup-storage
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  volumeMode: Filesystem
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discord-media-bot
+  labels:
+    app: discord-media-bot
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: discord-media-bot
+  template:
+    metadata:
+      labels:
+        app: discord-media-bot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        linkerd.io/inject: enabled
+    spec:
+      containers:
+      - name: discord-media-bot
+        image: your-registry/media-app:${IMAGE_TAG}
+        envFrom:
+        - secretRef:
+            name: media-secrets
+        ports:
+        - containerPort: 9090
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 5
