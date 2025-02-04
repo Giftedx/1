@@ -88,6 +88,36 @@ class Application:
         }
         self._container = Container()
         self._error_handlers: Dict[Type[Exception], Callable[[Exception], Awaitable[None]]] = {}
+        # Add improved metric collectors
+        self._resource_metrics = Histogram(
+            'resource_usage',
+            'Resource usage metrics',
+            ['type', 'operation'],
+            buckets=exponential_buckets(0.001, 2, 15)
+        )
+        self._cleanup_latency = Histogram(
+            'cleanup_latency',
+            'Resource cleanup latency',
+            ['resource_type'],
+            buckets=exponential_buckets(0.01, 2, 10)
+        )
+        self._adaptive_timeout_manager = AdaptiveTimeoutManager(
+            min_timeout=0.1,
+            max_timeout=30.0,
+            history_size=10
+        )
+        self._resource_pool = ResourcePool(
+            max_size=100,
+            max_idle=10,
+            cleanup_interval=60
+        )
+        self._resource_manager = ResourceManager(
+            cleanup_batch_size=10,
+            max_concurrent_cleanups=5
+        )
+        self._performance_metrics = PerformanceMetrics(
+            buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+        )
         
     def register_error_handler(self, exc_type: Type[Exception], handler: Callable):
         self._error_handlers[exc_type] = handler
@@ -143,14 +173,16 @@ class Application:
     @retry(**self._retry_config)
     async def _init_service(self, name: str) -> None:
         try:
-            service = await asyncio.wait_for(self._container.resolve(name), timeout=self._service_timeouts.get(name, 10.0))
-            await service.start()
-            self._service_health.labels(service=name).set(1)
+            with self._performance_metrics.track_operation(f"init_{name}"):
+                service = await self._resource_manager.acquire_service(
+                    name, 
+                    timeout=self._adaptive_timeout_manager.get_timeout(name)
+                )
+                await service.start()
         except Exception as e:
-            raise ServiceInitError(
-                code="SERVICE_INIT_FAILED",
-                message=f"Failed to initialize {name}"
-            )
+            self._startup_errors.inc()
+            await self._handle_service_error(name, e)
+            raise
 
     async def _service_cleanup(self, name: str, cleanup_func: Callable[[], Awaitable[None]]) -> None:
         """Wrapper for service cleanup with error handling."""
@@ -173,15 +205,11 @@ class Application:
             name (str): The name of the service to be cleaned up.
         """
         try:
-            import time
-            start_time = time.monotonic()
-            service = self._services[name]
-            await service.cleanup()
-            duration = time.monotonic() - start_time
-            self._metrics['service_shutdown_time'].labels(service=name).observe(duration)
+            async with self._resource_manager.cleanup_context(name):
+                with self._resource_metrics.labels(type=name, operation='cleanup').time():
+                    await self._services[name].cleanup()
         except Exception as e:
-            self._shutdown_errors.inc()
-            logger.error(f"Failed to cleanup {name}: {e}")
+            await self._handle_cleanup_error(name, e)
 
     async def register_health_check(self, name: str, check: Callable[[], Awaitable[bool]]) -> None:
         self._health_checks[name] = check

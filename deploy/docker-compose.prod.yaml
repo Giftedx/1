@@ -21,12 +21,12 @@ services:
       - OTEL_EXPORTER_JAEGER_AGENT_HOST=jaeger
       - OTEL_SAMPLER_TYPE=parentbased_traceidratio
       - OTEL_TRACES_SAMPLER_ARG=0.1
-      - REDIS_POOL_MIN_SIZE=5
-      - REDIS_POOL_MAX_SIZE=20
+      - REDIS_POOL_MIN_SIZE=10
+      - REDIS_POOL_MAX_SIZE=30
       - REDIS_IDLE_TIMEOUT=300
       - GOMAXPROCS=2
       - MALLOC_ARENA_MAX=2
-      - NODE_OPTIONS=--max-old-space-size=1536 --max-semi-space-size=192
+      - NODE_OPTIONS=--max-old-space-size=1024 --max-semi-space-size=128
       - OTEL_TRACES_SAMPLER=parentbased_traceidratio
       - OTEL_TRACES_SAMPLER_ARG=0.1
       - REDIS_POOL_SIZE=50
@@ -35,7 +35,10 @@ services:
       - REDIS_COMPRESSION_THRESHOLD=1024
       - OTEL_EXPORTER_OTLP_COMPRESSION=gzip
       - OTEL_BSP_MAX_QUEUE_SIZE=2048
+      - OTEL_BSP_MAX_EXPORT_BATCH_SIZE=512
       - OTEL_BSP_SCHEDULE_DELAY=1000
+      - OTEL_METRIC_EXPORT_INTERVAL=5000
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       # Performance optimizations
       - MALLOC_TRIM_THRESHOLD_=131072
       - PYTHONMALLOC=malloc
@@ -51,11 +54,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '3'
-          memory: 3G
+          cpus: '2'
+          memory: 2G
         reservations:
-          cpus: '1.5'
-          memory: 1.5G
+          cpus: '1'
+          memory: 1G
           devices:
             - capabilities: [gpu]
               count: 1
@@ -124,15 +127,15 @@ services:
       --no-appendfsync-on-rewrite yes
       --auto-aof-rewrite-percentage 100
       --auto-aof-rewrite-min-size 64mb
-      --maxmemory 2gb
-      --maxmemory-policy allkeys-lru
+      --maxmemory 1gb
+      --maxmemory-policy volatile-lru
       --save 900 1
       --save 300 10
       --stop-writes-on-bgsave-error no
       --rdb-save-incremental-fsync yes
       --aof-use-rdb-preamble yes
       --activedefrag yes
-      --active-defrag-threshold-lower 10
+      --active-defrag-threshold-lower 5
       --active-defrag-threshold-upper 30
       --active-defrag-cycle-min 25
       --active-defrag-cycle-max 75
@@ -140,7 +143,7 @@ services:
       --lazyfree-lazy-expire yes
       --lazyfree-lazy-server-del yes
       --replica-lazy-flush yes
-      --io-threads 4
+      --io-threads 2
       --io-threads-do-reads yes
       --maxmemory-samples 10
       --active-expire-effort 10

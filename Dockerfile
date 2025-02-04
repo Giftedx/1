@@ -1,6 +1,16 @@
 # Builder stage
 FROM python:3.11-slim-bullseye as builder
 
+# Add build optimizations
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    POETRY_VERSION=1.5.1 \
+    PYTHONOPTIMIZE=2 \
+    PYTHONFAULTHANDLER=1 \
+    PYTHONASYNCIODEBUG=0 \
+    PYTHONDEVMODE=0
+
 WORKDIR /install
 
 COPY requirements.txt .
@@ -16,7 +26,7 @@ RUN set -ex \
 # Final stage
 FROM python:3.11-slim-bullseye
 
-# Add system security patches
+# Add security optimizations
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
@@ -27,9 +37,10 @@ RUN apt-get update \
         curl \
         tini \
         dumb-init \
+        ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -s /bin/false -u 1001 appuser \
+    && adduser --system --group --no-create-home appuser \
     && mkdir -p /app /app/data \
     && chown -R appuser:appuser /app \
     && chmod -R 755 /app
@@ -40,7 +51,7 @@ USER appuser
 COPY --chown=appuser:appuser . .
 COPY --from=builder /install /usr/local
 
-# Enhanced environment configuration
+# Final stage optimizations
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/usr/local/bin:$PATH" \
@@ -48,10 +59,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONHASHSEED=random \
     MALLOC_ARENA_MAX=2 \
     PYTHONMALLOC=malloc \
-    MALLOC_TRIM_THRESHOLD_=131072 \
+    MALLOC_TRIM_THRESHOLD_=65536 \
     GOMAXPROCS=2 \
     DD_TRACE_ENABLED=true \
-    DD_PROFILING_ENABLED=true
+    DD_PROFILING_ENABLED=true \
+    DD_RUNTIME_METRICS_ENABLED=true
 
 # Security labels
 LABEL org.opencontainers.image.security.capabilities='{"drop": ["ALL"], "add": ["NET_BIND_SERVICE"]}' \
@@ -65,6 +77,17 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
 
 # Use tini and dumb-init for proper process management
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/bin/tini", "--"]
-CMD ["python", "-m", "uvicorn", "src.api.health:app", "--host", "0.0.0.0", "--port", "9090", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-keep-alive", "120"]
+CMD ["python", "-m", "uvicorn", "src.api.health:app", \
+     "--host", "0.0.0.0", \
+     "--port", "9090", \
+     "--workers", "2", \
+     "--loop", "uvloop", \
+     "--http", "httptools", \
+     "--proxy-headers", \
+     "--forwarded-allow-ips", "*", \
+     "--timeout-keep-alive", "120", \
+     "--backlog", "2048", \
+     "--limit-concurrency", "1000", \
+     "--limit-max-requests", "10000"]
 
 EXPOSE 9090

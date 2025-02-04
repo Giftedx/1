@@ -95,3 +95,25 @@ groups:
       severity: warning
     annotations:
       summary: "CPU throttling detected"
+
+  # Add memory leak detection
+  - alert: PotentialMemoryLeak
+    expr: |
+      (container_memory_usage_bytes{container="media-bot"} - container_memory_cache{container="media-bot"})
+      / container_spec_memory_limit_bytes{container="media-bot"} > 0.75
+    for: 30m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Potential memory leak detected"
+      description: "Non-cache memory usage consistently high"
+
+  # Add connection pool saturation alert
+  - alert: ConnectionPoolSaturation
+    expr: redis_pool_used_connections / redis_pool_max_connections > 0.8
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Connection pool near capacity"
+      description: "Redis connection pool usage > 80%"

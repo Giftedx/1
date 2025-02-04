@@ -18,6 +18,8 @@ from src.core.di_container import Container
 from src.core.service_manager import ServiceManager
 from src.monitoring.heartbeat import HeartbeatMonitor
 from prometheus_client import Counter, Histogram, Gauge
+from src.utils.async_limiter import AsyncRateLimiter
+from src.utils.error_handler import ErrorHandler
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,35 @@ class MediaStreamingBot(commands.Bot):
                                    'Number of active commands')
         }
         self._command_contexts: Dict[str, Any] = {}
+        self._command_limiter = AsyncRateLimiter(
+            rate=100,
+            period=60.0,
+            burst_size=20
+        )
+        self._error_handler = ErrorHandler(
+            max_retries=3,
+            backoff_factor=1.5
+        )
+        self._command_queue = asyncio.PriorityQueue()
+        self._command_scheduler = CommandScheduler(
+            max_concurrent=50,
+            timeout=30.0
+        )
+        self._rate_limiter = AdaptiveRateLimiter(
+            initial_rate=100,
+            burst_size=20,
+            window_size=60.0,
+            adaptation_factor=0.8
+        )
+        self._command_processor = CommandProcessor(
+            max_concurrent=50,
+            queue_size=1000,
+            priority_levels=3
+        )
+        self._session_manager = SessionManager(
+            cleanup_interval=300,
+            max_idle_time=600
+        )
 
     @asynccontextmanager
     async def graceful_shutdown(self) -> AsyncIterator[None]:
@@ -232,16 +263,40 @@ class MediaStreamingBot(commands.Bot):
         if message.author.bot:
             return
 
-        ctx = await self.get_context(message)
-        if not ctx.command:
-            return
+        async with self._rate_limiter.check(message.author.id) as allowed:
+            if not allowed:
+                await self._handle_rate_limit(message)
+                return
 
-        self._metrics['active_commands'].inc()
-        try:
-            async with self._track_command_metrics(ctx):
-                await super().process_commands(message)
-        finally:
-            self._metrics['active_commands'].dec()
+            ctx = await self.get_context(message)
+            if not ctx.command:
+                return
+
+            try:
+                await self._command_processor.execute(
+                    ctx,
+                    priority=self._get_command_priority(ctx),
+                    timeout=30.0
+                )
+            except CommandProcessingError as e:
+                await self._handle_command_error(ctx, e)
+
+    async def _execute_command_safely(self, ctx: commands.Context) -> None:
+        async with AsyncExitStack() as stack:
+            session = await stack.enter_async_context(self._session_manager.session(ctx))
+            await stack.enter_async_context(self._command_metrics(ctx))
+            await stack.enter_async_context(self._error_boundary(ctx))
+            
+            await self._execute_with_monitoring(ctx, session)
+
+    async def _process_command_queue(self) -> None:
+        while not self._command_queue.empty():
+            _, ctx = await self._command_queue.get()
+            try:
+                async with self._track_command_metrics(ctx):
+                    await ctx.command.invoke(ctx)
+            except Exception as e:
+                await self._error_handler.handle(ctx, e)
 
     @asynccontextmanager
     async def _track_command_metrics(self, ctx: commands.Context):

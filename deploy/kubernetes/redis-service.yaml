@@ -6,18 +6,28 @@ metadata:
     prometheus.io/scrape: "true"
     prometheus.io/port: "9121"
     service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-connection-draining-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-connection-draining-timeout: "60"
 spec:
   selector:
     app: redis
+    role: primary
   topologyKeys:
+    - "topology.kubernetes.io/zone"
     - "kubernetes.io/hostname"
-    - "*"
   ports:
     - name: redis
       port: 6379
       targetPort: 6379
       protocol: TCP
+      appProtocol: redis
     - name: metrics
       port: 9121
       targetPort: 9121
+      appProtocol: http
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 7200
   type: ClusterIP

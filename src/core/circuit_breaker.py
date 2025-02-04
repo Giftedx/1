@@ -66,8 +66,17 @@ class CircuitBreakerHalfOpenError(CircuitBreakerError):
     """Raised when circuit exceeds half-open call limit"""
     pass
 
+from statistics import mean, stdev, median, quantiles
+
+@dataclass
+class AdaptiveConfig:
+    min_timeout: float = 0.1
+    max_timeout: float = 10.0
+    window_size: int = 100
+    success_threshold: float = 0.9
+
 class CircuitBreaker:
-    def __init__(self, name: str, config: Optional<CircuitConfig] = None):
+    def __init__(self, name: str, config: Optional[CircuitConfig] = None):
         self.name = name
         self.config = config or CircuitConfig()
         self.state = CircuitState.CLOSED
@@ -82,6 +91,22 @@ class CircuitBreaker:
         }
         self.stats = CircuitStats()
         self._state_change_time = datetime.now()
+        self._sliding_window = SlidingWindowCounter(size=60, granularity=1)
+        self._error_threshold = ErrorThreshold(threshold=0.5, window_size=10)
+        self._response_times = SlidingWindow(size=100)
+        self._adaptive_timeout = AdaptiveTimeout(
+            min_timeout=0.1,
+            max_timeout=10.0,
+            percentile=95
+        )
+        self._failure_detector = AnomalyDetector(
+            window_size=100,
+            threshold=3.0  # Standard deviations
+        )
+        self._success_rate_tracker = SuccessRateTracker(
+            window_size=100,
+            min_samples=10
+        )
         
         # Initialize metrics
         CB_STATE.labels(name=self.name).set(self.state.value)
@@ -91,21 +116,13 @@ class CircuitBreaker:
             with tracer.start_span(f"circuit_breaker_{self.name}") as span:
                 span.set_attribute("circuit_state", self.state.name)
                 
+                if not await self._should_allow_request():
+                    span.set_attribute("error", "circuit_open")
+                    raise CircuitBreakerOpenError(f"Circuit {self.name} is OPEN")
+
                 start_time = datetime.now()
                 try:
-                    await self._check_state_transition()
-                    
-                    if self.state == CircuitState.OPEN:
-                        span.set_attribute("error", "circuit_open") 
-                        raise CircuitBreakerOpenError(f"Circuit {self.name} is OPEN")
-                    
-                    if self.state == CircuitState.HALF_OPEN:
-                        if self._half_open_calls >= self.config.half_open_max_calls:
-                            span.set_attribute("error", "max_half_open_calls")
-                            raise CircuitBreakerOpenError(f"Max half-open calls reached for {self.name}")
-                        self._half_open_calls += 1
-
-                    result = await func(*args, **kwargs)
+                    result = await self._execute_with_timeout(func, *args, **kwargs)
                     await self._on_success()
                     return result
 
@@ -117,6 +134,36 @@ class CircuitBreaker:
                 finally:
                     duration = (datetime.now() - start_time).total_seconds()
                     CB_LATENCY.labels(name=self.name).observe(duration)
+
+    async def _should_allow_request(self) -> bool:
+        if self.state == CircuitState.CLOSED:
+            return True
+        if self.state == CircuitState.OPEN:
+            if await self._should_transition_to_half_open():
+                self.state = CircuitState.HALF_OPEN
+                return True
+            return False
+        return self._half_open_calls < self.config.half_open_max_calls
+
+    async def _execute_with_timeout(self, func: Callable[..., T], *args, **kwargs) -> T:
+        timeout = self._get_adaptive_timeout()
+        async with async_timeout.timeout(timeout):
+            start = time.monotonic()
+            try:
+                result = await func(*args, **kwargs)
+                duration = time.monotonic() - start
+                self._update_timing_stats(duration)
+                return result
+            except Exception as e:
+                self._failure_detector.record_failure(time.monotonic())
+                raise
+
+    def _get_adaptive_timeout(self) -> float:
+        if len(self._response_times) < 10:
+            return self.config.timeout
+        p95 = quantiles(self._response_times, n=20)[18]  # 95th percentile
+        return min(max(p95 * 1.5, self._adaptive_config.min_timeout), 
+                  self._adaptive_config.max_timeout)
 
     async def _check_state_transition(self) -> None:
         now = datetime.now()

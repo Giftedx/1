@@ -16,18 +16,36 @@ services:
       - LOG_LEVEL=info
       - NODE_ENV=development
       - OTEL_TRACES_SAMPLER=parentbased_traceidratio
-      - OTEL_TRACES_SAMPLER_ARG=1.0
+      - OTEL_TRACES_SAMPLER_ARG=0.1
+      - MALLOC_ARENA_MAX=2
+      - PYTHONMALLOC=malloc
+      - GOMAXPROCS=2
+      - DD_PROFILING_ENABLED=true
+      - REDIS_POOL_SIZE=50
+      - REDIS_MIN_IDLE=10
+      - OTEL_BATCH_SPAN_PROCESSOR_EXPORT_TIMEOUT=30000
+      - OTEL_BSP_MAX_QUEUE_SIZE=4096
+      - OTEL_BSP_MAX_EXPORT_BATCH_SIZE=512
+      - REDIS_POOL_CONFIG={"maxsize":50,"minsize":10,"timeout":30}
+      - NODE_OPTIONS=--max-old-space-size=1024 --gc-interval=100
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 20s
+      timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     deploy:
       resources:
         limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
           cpus: '1'
           memory: 1G
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
     networks:
       app-network:
         ipv4_address: 172.28.0.2

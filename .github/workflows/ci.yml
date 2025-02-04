@@ -21,60 +21,115 @@ on:
 jobs:
   security-audit:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11]
+      fail-fast: false
+    
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
       - name: Run security audit
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --severity-threshold=high
+          args: |
+            --severity-threshold=high
+            --all-projects
+            --detection-depth=4
+            --sarif-file-output=snyk.sarif
 
-      # Cache vulnerability databases
       - name: Cache Security DBs
         uses: actions/cache@v3
         with:
           path: |
             ~/.cache/trivy
             ~/.cache/snyk
-          key: security-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+            ~/.cache/pre-commit
+          key: ${{ runner.os }}-security-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-security-
 
-      - name: Run additional security checks
+      - name: Run enhanced security checks
         run: |
+          # Install security tools
+          pip install bandit safety semgrep pre-commit
+          
+          # Run comprehensive checks
+          pre-commit run --all-files
+          bandit -r . -ll -iii --exclude tests/ -f json -o bandit-results.json
+          safety check --full-report --json > safety-report.json
+          semgrep scan --config=p/security-audit --json > semgrep-results.json
+          
+          # Run Trivy with enhanced options
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          trivy fs --security-checks vuln,config,secret .
-          trivy config --severity HIGH,CRITICAL .
+          trivy fs --security-checks vuln,config,secret \
+                   --ignore-unfixed \
+                   --exit-code 1 \
+                   --cache-dir .trivycache \
+                   --severity HIGH,CRITICAL \
+                   --format json > trivy-results.json .
 
   security-scan:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.11]
+      fail-fast: false
+
     steps:
       - uses: actions/checkout@v4
-      
-      # Cache Trivy vulnerability database
-      - name: Cache Trivy vulnerability database
+
+      - name: Cache vulnerability DBs
         uses: actions/cache@v3
         with:
-          path: ~/.cache/trivy
-          key: trivy-${{ github.sha }}
-          restore-keys: trivy-
+          path: |
+            ~/.cache/trivy
+            ~/.local/share/trivy
+          key: ${{ runner.os }}-vuln-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-vuln-
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run comprehensive security scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH,MEDIUM'
-          cache-dir: ~/.cache/trivy
-          
-      - name: OWASP Dependency Check
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          timeout: '10m'
+          cache-dir: .trivycache
+
+      - name: Enhanced OWASP Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
           project: 'discord-media-bot'
           path: '.'
           format: 'HTML,SARIF,JSON'
           failOnCVSS: 7
-          
+          enableExperimental: true
+          additionalArguments: >
+            --suppression suppression.xml
+            --nodeAuditSkipDevDependencies
+            --nodePackageSkipDevDependencies
+
+      # Upload all security reports
+      - name: Upload security results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
   build-test-deploy:
     needs: [security-audit, security-scan]
     # Run this job on an ubuntu-latest environment.
@@ -134,6 +189,7 @@ jobs:
           pytest -v -n auto --cov=src --cov-report=xml --cov-report=html --cov-branch --cov-fail-under=85
 
       # Upload coverage reports to Codecov.
+      # This step uploads the coverage reports to Codecov so that we can see the coverage reports.
       - name: Upload coverage reports
         uses: codecov/codecov-action@v3
         with:
@@ -180,3 +236,22 @@ jobs:
         run: |
           docker scout cves media-app:latest
           docker scout recommendations media-app:latest
+
+      - name: Performance benchmarking
+        run: |
+          pip install locust
+          locust --headless -f tests/performance/locustfile.py \
+                 --users 100 \
+                 --spawn-rate 10 \
+                 --run-time 5m \
+                 --html performance-report.html
+
+      - name: Advanced security scanning
+        run: |
+          trivy fs --security-checks vuln,config,secret \
+                   --ignore-unfixed \
+                   --exit-code 1 \
+                   --severity HIGH,CRITICAL .
+                   
+          grype dir:. --fail-on high \
+                      --config grype.yaml

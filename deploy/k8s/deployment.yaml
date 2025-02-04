@@ -173,18 +173,25 @@ spec:
           value: "deployment.environment=production,service.version=${APP_VERSION}"
         - name: MALLOC_ARENA_MAX
           value: "2"
+        # Optimized environment settings
+        - name: OTEL_BATCH_PROCESSOR_QUEUE_SIZE
+          value: "2048"
+        - name: REDIS_POOL_CONFIG
+          value: '{"maxsize":30,"minsize":5,"timeout":20}'
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=1024"
         ports:
         - containerPort: 9090
         - containerPort: 4317
           name: otlp
         resources:
           requests:
-            memory: "1.5Gi"
-            cpu: "750m"
+            memory: "750Mi"
+            cpu: "500m"
             ephemeral-storage: "1Gi"
           limits:
-            memory: "2Gi"
-            cpu: "2"
+            memory: "1.5Gi"
+            cpu: "1.5"
             ephemeral-storage: "2Gi"
         livenessProbe:
           httpGet:

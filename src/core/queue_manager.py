@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from prometheus_client import Histogram, Gauge, Counter
 import asyncio
 import logging
+from src.utils.backpressure import BackpressureManager
+from src.utils.priority_queue import AdaptivePriorityQueue
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,28 @@ class QueueManager:
         self._queue_size = Gauge('queue_size', 'Current queue size', ['priority'])
         self._dropped_items = Counter('queue_dropped_items', 'Number of dropped items')
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._backpressure = BackpressureManager(
+            max_load=0.8,
+            window_size=60
+        )
+        self._priority_queue = AdaptivePriorityQueue(
+            max_size=max_length,
+            priorities=[QueuePriority.HIGH, QueuePriority.NORMAL, QueuePriority.LOW]
+        )
+        self._batch_size = 10
+        self._flush_interval = 1.0
+        self._batch_processor = BatchProcessor(
+            max_size=100,
+            flush_interval=1.0,
+            max_retries=3
+        )
+        self._priority_scheduler = PriorityScheduler(
+            levels={
+                QueuePriority.HIGH: 0.5,    # 50% of resources
+                QueuePriority.NORMAL: 0.3,  # 30% of resources
+                QueuePriority.LOW: 0.2      # 20% of resources
+            }
+        )
 
     async def start(self) -> None:
         """Start background tasks."""
@@ -63,31 +87,36 @@ class QueueManager:
 
     @track_latency("queue_add")
     async def add(self, media_info: dict, priority: int = QueuePriority.NORMAL) -> None:
-        async with self._queue_metrics['enqueue_latency'].time():
-            if await self.redis_manager.execute('LLEN', self.queue_key) >= self.max_length:
-                self._dropped_items.inc()
-                raise QueueFullError("Queue is at maximum capacity")
-            
-            media_info['added_at'] = time.time()
-            await self.redis_manager.execute('RPUSH', self.queue_key, json.dumps(media_info))
-            await self._update_stats('add')
+        if not await self._backpressure.can_accept():
+            raise QueueFullError("System under high load")
+
+        async with self._batch_operation() as batch:
+            batch.append((priority, media_info))
+            if len(batch) >= self._batch_size:
+                await self._flush_batch(batch)
+
+    async def _flush_batch(self, items: List[tuple]) -> None:
+        async with self.redis_manager.pipeline() as pipe:
+            for priority, item in items:
+                queue_key = self.priority_queues[priority]
+                pipe.rpush(queue_key, json.dumps(item))
+            await pipe.execute()
 
     async def add_batch(self, items: List[dict], priority: int = QueuePriority.NORMAL) -> None:
-        async with self.redis_manager.redis.pipeline() as pipe:
+        async with self._batch_processor.batch() as batch:
             for item in items:
                 item['added_at'] = time.time()
-                await pipe.rpush(self.priority_queues[priority], json.dumps(item))
-            await pipe.execute()
+                batch.add_item(priority, item)
 
     @track_latency("queue_get")
     async def get_next(self) -> Optional[dict]:
-        for priority in [QueuePriority.HIGH, QueuePriority.NORMAL, QueuePriority.LOW]:
-            item = await self.redis_manager.execute('LPOP', self.priority_queues[priority])
-            if item:
-                data = json.loads(item)
-                await self._update_stats('remove')
-                return data
-        raise QueueEmptyError("Queue is empty")
+        priority = await self._priority_scheduler.get_next_priority()
+        for _ in range(len(self.priority_queues)):
+            try:
+                return await self._pop_from_queue(priority)
+            except QueueEmptyError:
+                priority = self._priority_scheduler.get_fallback_priority(priority)
+        raise QueueEmptyError("All queues empty")
 
     async def get_queue_stats(self) -> Dict[str, int]:
         stats = await self.redis_manager.execute('HGETALL', self.stats_key)

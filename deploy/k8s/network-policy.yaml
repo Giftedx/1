@@ -4,6 +4,7 @@ metadata:
   name: media-bot-network-policy
   annotations:
     network.kubernetes.io/policy-type: "Calico"
+    policy.network.kubernetes.io/metrics: "enabled"
 spec:
   podSelector:
     matchLabels:
@@ -16,18 +17,20 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: ingress-nginx
-    - podSelector:
+      podSelector:
         matchLabels:
-          app: monitoring
+          app.kubernetes.io/component: controller
     ports:
     - protocol: TCP
       port: 9090
-      endPort: 9091
+    - protocol: TCP
+      port: 9091
   egress:
   - to:
     - podSelector:
         matchLabels:
           app: redis
+          role: primary
     ports:
     - protocol: TCP
       port: 6379
@@ -38,24 +41,7 @@ spec:
     ports:
     - protocol: TCP
       port: 9091
-    - protocol: TCP
-      port: 4317  # OTLP port
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: logging
-    ports:
-    - protocol: TCP
-      port: 9200
+      endPort: 9093
 
 ---
 apiVersion: networking.k8s.io/v1

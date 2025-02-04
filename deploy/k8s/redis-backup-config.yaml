@@ -10,34 +10,26 @@ data:
   BACKUP_DIR: /backup
   BACKUP_RETENTION_DAYS: "7"
   REDIS_CONFIG: |
-    # Memory management
-    maxmemory 4gb
-    maxmemory-policy volatile-ttl
-    maxmemory-samples 20
+    # Advanced performance tuning
+    maxmemory 6gb
+    maxmemory-policy volatile-lfu
+    maxmemory-samples 15
     
-    # Performance tuning
+    # Enhanced I/O settings
     io-threads 8
     io-threads-do-reads yes
     dynamic-hz yes
     
-    # Enhanced security
-    protected-mode yes
-    rename-command FLUSHALL ""
-    rename-command FLUSHDB ""
-    rename-command CONFIG ""
-    rename-command DEBUG ""
-    
-    # Persistence
+    # Improved persistence
     aof-use-rdb-preamble yes
-    aof-timestamp-enabled yes
     rdb-save-incremental-fsync yes
     
-    # Advanced optimizations
-    active-defrag-max-scan-fields 2000
-    active-expire-effort 10
-    active-defrag-ignore-bytes 200mb
+    # Memory optimization
+    active-defrag-ignore-bytes 100mb
+    active-defrag-cycle-min 15
     jemalloc-bg-thread yes
     
-    # Network
-    tcp-keepalive 30
-    tcp-backlog 1024
+    # Connection tuning
+    tcp-keepalive 45
+    tcp-backlog 2048
+    maxclients 15000

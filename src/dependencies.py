@@ -1,5 +1,5 @@
 import asyncio
-from typing import AsyncGenerator, TypeVar, Generic, Dict, Callable, Awaitable, AsyncContextManager
+from typing import AsyncGenerator, TypeVar, Generic, Dict, Callable, Awaitable, AsyncContextManager, Optional
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from src.utils.config import Config
@@ -8,6 +8,8 @@ from src.plex_server import PlexServer
 from src.metrics import ACTIVE_STREAMS, ActiveStreams
 from src.core.backpressure import Backpressure
 from src.core.circuit_breaker import CircuitBreaker
+from cachetools import TTLCache
+from src.utils.retry import ExponentialBackoff
 
 T = TypeVar('T')
 
@@ -24,22 +26,43 @@ class ResourceManager(Generic[T]):
         self._metrics = METRICS
         self._resource_stats: Dict[str, Dict[str, float]] = {}
         self._cleanup_hooks: Dict[str, Callable] = {}
+        self._retry_backoff = ExponentialBackoff(min_delay=1.0, max_delay=30.0)
+        self._resource_cache = TTLCache(maxsize=100, ttl=3600)
+        self._resource_monitor = ResourceMonitor()
+        self._cleanup_scheduler = CleanupScheduler()
+        self._resource_lifecycle = ResourceLifecycleManager(
+            max_idle_time=300,
+            cleanup_interval=60
+        )
+        self._health_monitor = HealthMonitor(
+            check_interval=30,
+            failure_threshold=3
+        )
 
     async def get_or_create(self, key: str, factory: Callable[[], Awaitable[T]]) -> T:
-        if key not in self._resources:
-            for attempt in range(self.config.max_retries):
-                try:
-                    resource = await asyncio.wait_for(factory(), self.config.timeout)
-                    self._resources[key] = resource
-                    self._metrics.increment('resource_creation_success', labels={'type': key})
-                    return resource
-                except Exception as e:
-                    self._metrics.increment('resource_creation_error', 
-                                          labels={'type': key, 'error': type(e).__name__})
-                    if attempt == self.config.max_retries - 1:
-                        raise
-                    await asyncio.sleep(self.config.retry_delay * (attempt + 1))
-        return self._resources[key]
+        if resource := await self._get_cached_resource(key):
+            return resource
+
+        async with self._resource_lock(key):
+            return await self._create_and_cache_resource(key, factory)
+
+    async def _get_cached_resource(self, key: str) -> Optional[T]:
+        if resource := self._resource_cache.get(key):
+            if await self._health_monitor.is_healthy(resource):
+                return resource
+            await self._cleanup_resource(key, resource)
+        return None
+
+    async def cleanup_resources(self) -> None:
+        stale_resources = await self._resource_monitor.get_stale_resources()
+        for resource in stale_resources:
+            await self._cleanup_resource(resource)
+            
+    async def _cleanup_resource(self, resource: T) -> None:
+        if hasattr(resource, 'close'):
+            await resource.close()
+        elif hasattr(resource, 'cleanup'):
+            await resource.cleanup()
 
     @asynccontextmanager
     async def resource_context(self, key: str) -> AsyncContextManager[T]:

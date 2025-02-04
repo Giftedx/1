@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import signal
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, AsyncGenerator
 import psutil
 from prometheus_client import Gauge, Summary
 from dataclasses import dataclass, field
@@ -12,6 +12,7 @@ from src.monitoring.metrics import CPU_USAGE, MEMORY_USAGE
 from src.core.worker_pool import WorkerPool, WorkerConfig
 from contextlib import asynccontextmanager
 from src.core.memory_manager import MemoryManager, MemoryThresholds
+from src.utils.process_pool import ProcessPool
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,29 @@ class FFmpegManager:
         self._process_cleanup_tasks: List[asyncio.Task] = []
         self._process_duration = Summary('ffmpeg_process_duration_seconds',
                                        'Duration of FFmpeg processes')
+        self._process_pool = ProcessPool(max_size=self.resource_limits.max_processes)
+        self._stream_cache = TTLCache(maxsize=100, ttl=300)
+        self._adaptive_quality = AdaptiveQuality(
+            min_quality=20,
+            max_quality=28,
+            target_cpu=70.0
+        )
+        self._process_scheduler = ProcessScheduler(
+            max_concurrent=self.resource_limits.max_processes,
+            priority_levels=3
+        )
+        self._performance_monitor = PerformanceMonitor(
+            warning_threshold=70.0,
+            critical_threshold=90.0
+        )
+        self._process_monitor = ProcessMonitor(
+            check_interval=5.0,
+            metrics_callback=self._update_process_metrics
+        )
+        self._transcoding_pipeline = TranscodingPipeline(
+            preset_configs=self._load_transcoding_presets(),
+            hardware_acceleration=True
+        )
 
     async def _adjust_resource_limits(self, stats: Dict) -> None:
         if not self._adaptive_limits:
@@ -152,9 +176,18 @@ class FFmpegManager:
         stats = await self._collect_process_stats()
         return not await self._check_resource_limits(stats)
 
-    async def stream_media(self, media_path: str, quality: str, priority: int = 1) -> None:
-        job = FFmpegJob(priority=priority, media_path=media_path, quality=quality)
-        await self._job_queue.put(job)
+    async def stream_media(self, media_path: str, quality: str, priority: int = 1) -> AsyncGenerator[None, None]:
+        cache_key = f"{media_path}:{quality}"
+        if cached_stream := self._stream_cache.get(cache_key):
+            return cached_stream
+
+        process_slot = await self._process_scheduler.acquire(priority)
+        try:
+            command = self._build_optimized_command(media_path, quality)
+            process = await self._start_process_with_limits(command)
+            yield process
+        finally:
+            self._process_scheduler.release(process_slot)
 
     @asynccontextmanager
     async def stream_session(self, media_path: str, quality: str, priority: int = 1):
@@ -209,6 +242,35 @@ class FFmpegManager:
             raise StreamingError(f"FFmpeg process failed: {str(e)}") from e
         finally:
             self._process_cleanup_tasks = [t for t in self._process_cleanup_tasks if not t.done()]
+
+    async def _start_process(self, command: List[str]) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            limit=32768,
+            preexec_fn=lambda: os.setpriority(os.PRIO_PROCESS, 0, 10)
+        )
+
+    async def _start_process_with_limits(self, command: List[str]) -> asyncio.subprocess.Process:
+        resource_limits = await self._calculate_resource_limits()
+        env = self._prepare_process_environment()
+        
+        return await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            limit=32768,
+            preexec_fn=lambda: self._apply_process_limits(resource_limits),
+            env=env
+        )
+
+    def _prepare_process_environment(self) -> Dict[str, str]:
+        return {
+            'FFREPORT': f'file=ffmpeg-{time.time()}.log:level=32',
+            'CUDA_VISIBLE_DEVICES': self._get_available_gpu(),
+            'FFMPEG_THREADS': str(self._calculate_optimal_threads())
+        }
 
     async def _monitor_process(self, process: asyncio.subprocess.Process, media_path: str) -> None:
         """Monitor a single FFmpeg process."""

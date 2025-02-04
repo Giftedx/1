@@ -252,6 +252,19 @@ class ResourceStateMachine:
             to_state=new_state.name
         ).inc()
 
+    def get_state_metrics(self) -> Dict[str, Dict[str, float]]:
+        """Get detailed state transition metrics."""
+        metrics = {}
+        for resource, state in self._states.items():
+            transitions = self._transitions.labels(resource=resource)
+            duration = self._state_durations.labels(resource=resource, state=state.name)
+            metrics[resource] = {
+                "current_state": state.name,
+                "transitions": transitions._value.get(),
+                "duration": duration._sum.get()
+            }
+        return metrics
+
 class ResourceMonitor:
     """Monitors resource usage and cleanup progress."""
     def __init__(self):
@@ -580,7 +593,7 @@ class DeadlockTimeoutError(ShutdownError):
     pass 
 
 class GracefulShutdown:
-    def __init__(self, config: Optional[ShutdownConfig] = None):
+    def __init__(self, config: Optional<ShutdownConfig] = None):
         self._config = config or ShutdownConfig()
         self.shutdown_event = asyncio.Event()
         self._tasks: Set[TrackedTask] = set()
@@ -1315,6 +1328,30 @@ class GracefulShutdown:
                 for phase in ShutdownPhase
             }
         }
+
+class AdaptiveTimeoutManager:
+    def __init__(self, min_timeout: float = 0.1, max_timeout: float = 30.0, history_size: int = 10):
+        self._min = min_timeout
+        self._max = max_timeout
+        self._history_size = history_size
+        self._history: Dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=history_size))
+        self._variance_weight = 1.5
+
+    def update_timeout(self, key: str, avg_duration: float, max_duration: float) -> None:
+        self._history[key].append(max_duration)
+        
+    def get_timeout(self, key: str) -> float:
+        if not self._history[key]:
+            return self._min
+        
+        avg = statistics.mean(self._history[key])
+        if len(self._history[key]) > 1:
+            variance = statistics.variance(self._history[key])
+            timeout = avg + (variance * self._variance_weight)
+        else:
+            timeout = avg * 1.5
+            
+        return min(max(timeout, self._min), self._max)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

@@ -7,7 +7,7 @@ metadata:
     prometheus.io/port: "9091"
     backup.kubernetes.io/deltas: "daily=7,weekly=4,monthly=6"
 spec:
-  schedule: "0 */6 * * *" # Every 6 hours
+  schedule: "0 */4 * * *" # Every 4 hours
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
   concurrencyPolicy: Forbid
@@ -31,6 +31,36 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
+
+                  # Enhanced backup process
+                  BACKUP_FILE="dump-$(date +%Y%m%d-%H%M%S).rdb"
+
+                  # Use temporary directory with cleanup
+                  TEMP_DIR=$(mktemp -d)
+                  trap 'rm -rf ${TEMP_DIR}' EXIT
+
+                  # Improved compression and validation
+                  redis-cli --rdb ${TEMP_DIR}/${BACKUP_FILE}
+
+                  # Parallel compression
+                  pigz -9 -p 2 ${TEMP_DIR}/${BACKUP_FILE}
+
+                  # Encrypt backup
+                  gpg --batch --yes --symmetric --cipher-algo AES256 \
+                      --passphrase "${BACKUP_KEY}" \
+                      -o /backup/${BACKUP_FILE}.gpg \
+                      ${TEMP_DIR}/${BACKUP_FILE}.gz
+
+                  # Validate backup
+                  if ! gpg --batch --quiet --decrypt \
+                      --passphrase "${BACKUP_KEY}" \
+                      /backup/${BACKUP_FILE}.gpg > /dev/null; then
+                    echo "Backup validation failed"
+                    exit 1
+                  fi
+
+                  # Cleanup old backups
+                  find /backup -name "dump-*.rdb.gpg" -mtime +7 -delete
 
                   # Enhanced locking mechanism
                   LOCK_KEY="backup_lock:$(date +%Y%m%d)"
@@ -59,9 +89,30 @@ spec:
                     exit 1
                   fi
 
-                  # Use temporary directory for processing
-                  TEMP_DIR=$(mktemp -d)
-                  trap 'rm -rf ${TEMP_DIR}' EXIT
+                  # Enhanced backup with retry mechanism
+                  backup_with_retry() {
+                    local attempts=3
+                    local wait_time=5
+                    
+                    for ((i=1; i<=$attempts; i++)); do
+                      if timeout 30m redis-cli -h ${REDIS_HOST} --rdb /backup/temp.rdb; then
+                        return 0
+                      fi
+                      echo "Backup attempt $i failed, waiting ${wait_time}s..."
+                      sleep $wait_time
+                      wait_time=$((wait_time * 2))
+                    done
+                    return 1
+                  }
+
+                  # Optimized compression pipeline
+                  compress_and_encrypt() {
+                    pigz -9 -p 4 | \
+                    gpg --batch --yes --symmetric \
+                        --cipher-algo AES256 \
+                        --compress-algo none \
+                        --passphrase "${BACKUP_KEY}"
+                  }
 
                   # Perform backup with improved compression
                   timeout 30m redis-cli -h ${REDIS_HOST} -p ${REDIS_PORT} --rdb ${TEMP_DIR}/dump.rdb

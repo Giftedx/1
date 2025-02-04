@@ -8,6 +8,8 @@ from src.core.caching import cached
 from src.monitoring.metrics import track_latency
 from tenacity import retry, stop_after_attempt, wait_exponential
 from prometheus_client import Counter, Histogram
+from functools import lru_cache
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,18 @@ class PlexServer:
             'errors': Counter('plex_errors_total', 'Number of Plex errors',
                             ['type'])
         }
+        self._connection_pool = AsyncConnectionPool(max_size=10)
+        self._request_semaphore = asyncio.Semaphore(5)
+        self._media_cache = TTLCache(maxsize=1000, ttl=300)
+
+    @asynccontextmanager
+    async def _plex_session(self):
+        async with self._request_semaphore:
+            try:
+                conn = await self._connection_pool.acquire()
+                yield conn
+            finally:
+                await self._connection_pool.release(conn)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def ping(self) -> None:
@@ -48,17 +62,15 @@ class PlexServer:
 
     @cached(ttl=300)
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @lru_cache(maxsize=100)
     async def get_media_info(self, media_path: str):
-        try:
-            with self._metrics['search_latency'].time():
-                media = await asyncio.to_thread(self.server.library.search, media_path)
-                if not media:
-                    self._metrics['errors'].labels(type='not_found').inc()
-                    raise MediaNotFoundError(f"Media not found: {media_path}")
-                return media[0]
-        except Exception as e:
-            self._metrics['errors'].labels(type='search_error').inc()
-            raise
+        async with self._plex_session() as session:
+            try:
+                with self._metrics['search_latency'].time():
+                    return await self._fetch_media_with_retry(session, media_path)
+            except Exception as e:
+                self._handle_media_error(e, media_path)
+                raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     @cached(ttl=60)
