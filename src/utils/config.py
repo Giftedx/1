@@ -100,3 +100,17 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 settings = Settings()
+
+class Settings:
+    BOT_TOKEN = os.getenv('BOT_TOKEN')
+    PLEX_URL = os.getenv('PLEX_URL')
+    PLEX_TOKEN = os.getenv('PLEX_TOKEN')
+    COMMAND_PREFIX = os.getenv('COMMAND_PREFIX', '!')
+    FFMPEG_PRESET = os.getenv('FFMPEG_PRESET', 'veryfast')
+    MEDIA_WORKER_THREADS = int(os.getenv('MEDIA_WORKER_THREADS', '4'))
+    VIDEO_WIDTH = int(os.getenv('VIDEO_WIDTH', '1280'))
+    VIDEO_HEIGHT = int(os.getenv('VIDEO_HEIGHT', '720'))
+    FFMPEG_THREADS = int(os.getenv('FFMPEG_THREADS', '2'))
+    FFMPEG_HWACCEL = os.getenv('FFMPEG_HWACCEL', 'auto')
+
+settings = Settings()

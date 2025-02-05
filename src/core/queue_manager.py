@@ -11,6 +11,8 @@ import asyncio
 import logging
 from src.utils.backpressure import BackpressureManager
 from src.utils.priority_queue import AdaptivePriorityQueue
+from datetime import datetime
+from src.metrics import METRICS
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,13 @@ class QueuePriority:
     HIGH = 0
     NORMAL = 1
     LOW = 2
+
+@dataclass
+class QueueItem:
+    media_id: str
+    requester_id: str
+    timestamp: datetime
+    priority: int = 0
 
 class QueueManager:
     """
@@ -66,6 +75,10 @@ class QueueManager:
                 QueuePriority.LOW: 0.2      # 20% of resources
             }
         )
+        self.queue: List[QueueItem] = []
+        self._lock = asyncio.Lock()
+        self._event = asyncio.Event()
+        self.current_item: Optional[QueueItem] = None
 
     async def start(self) -> None:
         """Start background tasks."""
@@ -159,3 +172,42 @@ class QueueManager:
                     if current_time - data['added_at'] > 3600:  # 1 hour timeout
                         tr.lrem(priority_queue, 0, item)
                 await tr.execute()
+
+    async def add(self, item: QueueItem) -> bool:
+        async with self._lock:
+            if len(self.queue) >= self.max_length:
+                METRICS.increment('queue_rejections')
+                return False
+                
+            # Insert with priority sorting
+            insert_idx = 0
+            for idx, queued in enumerate(self.queue):
+                if item.priority > queued.priority:
+                    break
+                insert_idx = idx + 1
+                
+            self.queue.insert(insert_idx, item)
+            METRICS.set_value('queue_length', len(self.queue))
+            self._event.set()
+            return True
+
+    async def get(self) -> Optional[QueueItem]:
+        async with self._lock:
+            if not self.queue:
+                self._event.clear()
+                return None
+            
+            item = self.queue.pop(0)
+            self.current_item = item
+            METRICS.set_value('queue_length', len(self.queue))
+            return item
+
+    async def wait_for_item(self) -> QueueItem:
+        await self._event.wait()
+        return await self.get()
+
+    async def clear(self) -> None:
+        async with self._lock:
+            self.queue.clear()
+            self.current_item = None
+            METRICS.set_value('queue_length', 0)

@@ -93,9 +93,9 @@ def main():
     )
     client = SelfBotClient(ffmpeg_manager)
     client._voice_channel_id = 1234567890  # Update with a valid channel id
-    token = os.getenv("STREAMING_BOT_TOKEN")
+    token = os.getenv("DISCORD_SELFBOT_TOKEN")
     if not token:
-        logger.error("STREAMING_BOT_TOKEN not set")
+        logger.error("DISCORD_SELFBOT_TOKEN not set")
         exit(1)
     client.run(token)
 

@@ -1,37 +1,50 @@
-version: "3.8"
+version: '3.9'
 services:
-  discord-bot:
-    image: media-app:latest
-    container_name: discord_bot
+  bot:
+    build: .
+    container_name: media_bot
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - PLEX_URL=${PLEX_URL}
       - PLEX_TOKEN=${PLEX_TOKEN}
-      - FFMPEG_LOGLEVEL=warning
+      - REDIS_URL=redis://redis:6379
+      - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
     ports:
-      - "9090:9090"
-    restart: always
-
-  discord-selfbot:
-    image: media-app:latest
-    container_name: discord_selfbot
-    environment:
-      - DISCORD_SELFBOT_TOKEN=${DISCORD_SELFBOT_TOKEN}
-      - FFMPEG_LOGLEVEL=warning
-    restart: always
-
-  app:
-    build: .
-    env_file:
-      - .env.example
-    ports:
-      - "8000:8000"
+      - "8080:8080"
     depends_on:
       - redis
-    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  selfbot:
+    build: .
+    container_name: media_selfbot
+    environment:
+      - DISCORD_SELFBOT_TOKEN=${DISCORD_SELFBOT_TOKEN}
+      - PLEX_URL=${PLEX_URL}
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - REDIS_URL=redis://redis:6379
+      - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
+    command: ["python", "-m", "src.discord_selfbot"]
+    ports:
+      - "9090:9090"
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    restart: always
+    image: redis:7
+    container_name: media_redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

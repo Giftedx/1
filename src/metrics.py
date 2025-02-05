@@ -168,3 +168,24 @@ METRICS = Metrics()
 
 # Expose ACTIVE_STREAMS as an instance of ActiveStreams.
 ACTIVE_STREAMS = ActiveStreams()
+
+# Media streaming metrics
+MEDIA_ACTIVE_STREAMS = Gauge('media_active_streams', 'Number of active media streams')
+STREAM_QUALITY = Gauge('media_stream_quality_kbps', 'Stream quality in kbps')
+STREAM_ERRORS = Counter('media_stream_errors_total', 'Total number of stream errors')
+
+# Plex metrics
+PLEX_REQUESTS = Counter('plex_requests_total', 'Total number of Plex API requests')
+PLEX_ERRORS = Counter('plex_errors_total', 'Total number of Plex API errors')
+
+# FFmpeg metrics
+FFMPEG_ERRORS = Counter('ffmpeg_errors_total', 'Total number of FFmpeg errors')
+TRANSCODE_TIME = Histogram(
+    'transcode_duration_seconds',
+    'Time spent transcoding media',
+    buckets=[1, 5, 10, 30, 60, 120, 300]
+)
+
+# Discord metrics
+DISCORD_COMMANDS = Counter('discord_commands_total', 'Total Discord commands received')
+VOICE_CONNECTIONS = Gauge('discord_voice_connections', 'Active voice channel connections')

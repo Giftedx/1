@@ -1,30 +1,46 @@
-from flask import Flask, render_template
-from src.utils.config import settings
-from src.monitoring.metrics import ACTIVE_CONNECTIONS  # Assuming this is updated to reflect active streams
+import logging
+from fastapi import FastAPI, WebSocket
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from src.metrics import ACTIVE_STREAMS, STREAM_QUALITY
+from src.core.metrics_manager import MetricsManager
 
-app = Flask(__name__)
+logger = logging.getLogger(__name__)
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
-@app.route("/")
-def index():
-    # Replace placeholders with real metrics if available.
-    metrics = {
-        "active_streams": ACTIVE_CONNECTIONS._value if hasattr(ACTIVE_CONNECTIONS, "_value") else "N/A",
-        "system_health": "OK"  # This may be replaced with actual health check results.
+app.mount("/static", StaticFiles(directory="static"), name="static")
+metrics_manager = MetricsManager()
+
+@app.get("/")
+async def dashboard(request):
+    stats = {
+        "active_streams": ACTIVE_STREAMS.collect()[0].samples[0].value,
+        "stream_quality": STREAM_QUALITY.collect()[0].samples[0].value,
+        "system_stats": await metrics_manager.get_system_stats()
     }
-    return render_template("dashboard.html", metrics=metrics)
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {"request": request, "stats": stats}
+    )
 
-@app.route("/metrics")
-def metrics_endpoint():
-    # Return metrics data as JSON for external monitoring integrations.
-    # In production, consider using Prometheus' /metrics endpoint.
-    metrics = {
-        "active_streams": ACTIVE_CONNECTIONS._value if hasattr(ACTIVE_CONNECTIONS, "_value") else "N/A",
-        "system_health": "OK"
-    }
-    return metrics
+@app.websocket("/ws/metrics")
+async def metrics_websocket(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            stats = await metrics_manager.get_real_time_stats()
+            await websocket.send_json(stats)
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        await websocket.close()
 
-def run_dashboard():
-    app.run(host="0.0.0.0", port=8080, debug=False)
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
-    run_dashboard()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080, ssl_context='adhoc')

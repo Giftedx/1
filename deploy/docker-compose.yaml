@@ -8,11 +8,10 @@ services:
       - "80:9090"
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - LOG_LEVEL=info
-      - NODE_ENV=production
       - REDIS_POOL_SIZE=50
       - OTEL_BATCH_SPAN_PROCESSOR_EXPORT_TIMEOUT=30000
-      - OTEL_BSP_MAX_QUEUE_SIZE=4096
+      - LOG_LEVEL=info
+      - NODE_ENV=production
     deploy:
       resources:
         limits:
@@ -27,7 +26,7 @@ services:
 
   redis:
     image: redis:7.0-alpine
-    command: redis-server /usr/local/etc/redis/redis.conf --requirepass ${REDIS_PASSWORD}
+    command: redis-server /usr/local/etc/redis/redis.conf
     volumes:
       - redis-data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro

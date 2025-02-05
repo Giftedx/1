@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Media Bot Dashboard</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
 <body class="bg-light">
   <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -19,11 +20,36 @@
       </div>
       <div class="card-body">
         <h5 class="card-title">Production‑Grade Media Bot</h5>
-        <p class="card-text">All systems are operational.</p>
-        <!-- Future integration: Live metrics, logs, and status updates. -->
+        <p class="card-text" id="system-status">Loading...</p>
+        <div id="metrics" class="d-none">
+          <h6>Metrics</h6>
+          <ul>
+            <li>Active Streams: <span id="active-streams">0</span></li>
+            <li>System Health: <span id="system-health">OK</span></li>
+            <li>Stream Quality: <span id="stream-quality">N/A</span></li>
+          </ul>
+        </div>
       </div>
     </div>
   </div>
+  <script>
+    async function fetchMetrics() {
+      try {
+        const response = await axios.get('/metrics');
+        const metrics = response.data;
+        document.getElementById('active-streams').textContent = metrics.active_streams;
+        document.getElementById('system-health').textContent = metrics.system_health;
+        document.getElementById('stream-quality').textContent = metrics.stream_quality;
+        document.getElementById('metrics').classList.remove('d-none');
+        document.getElementById('system-status').textContent = 'All systems are operational.';
+      } catch (error) {
+        document.getElementById('system-status').textContent = 'Error fetching metrics.';
+      }
+    }
+
+    fetchMetrics();
+    setInterval(fetchMetrics, 30000); // Refresh metrics every 30 seconds
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

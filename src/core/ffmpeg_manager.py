@@ -3,7 +3,8 @@ from typing import Dict, Optional, List, AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from cachetools import TTLCache  # Ensure this dependency is installed
 from prometheus_client import Gauge, Summary
-# ...additional imports for adaptive quality etc.
+from dataclasses import dataclass
+from src.metrics import FFMPEG_ERRORS, STREAM_QUALITY
 
 logger = logging.getLogger(__name__)
 
@@ -11,18 +12,22 @@ FFMPEG_PROCESSES = Gauge('ffmpeg_active_processes', 'Number of active FFmpeg pro
 FFMPEG_CPU_USAGE = Gauge('ffmpeg_cpu_usage_percent', 'FFmpeg CPU usage percentage')
 FFMPEG_MEMORY_USAGE = Gauge('ffmpeg_memory_usage_bytes', 'FFmpeg memory usage in bytes')
 
+@dataclass
+class FFmpegConfig:
+    hwaccel: str = "auto"
+    thread_queue_size: int = 512
+    preset: str = "veryfast"
+    width: int = 1280
+    height: int = 720
+
 class StreamingError(Exception):
     pass
 
 class FFmpegManager:
-    def __init__(self, virtual_cam: str, video_width: int, video_height: int, loglevel: str,
-                 resource_limits: Optional[dict] = None) -> None:
-        self.virtual_cam = virtual_cam
-        self.video_width = video_width
-        self.video_height = video_height
-        self.loglevel = loglevel
-        self.active_processes: Dict[str, asyncio.subprocess.Process] = {}
-        self.resource_limits = resource_limits or {"max_cpu_percent": 80.0, "max_memory_mb": 1024, "max_processes": 5}
+    def __init__(self, config: FFmpegConfig):
+        self.config = config
+        self._active_processes: Dict[str, asyncio.subprocess.Process] = {}
+        self.resource_limits = {"max_cpu_percent": 80.0, "max_memory_mb": 1024, "max_processes": 5}
         self._job_queue = asyncio.PriorityQueue()
         self._shutdown_event = asyncio.Event()
         self._process_duration = Summary('ffmpeg_process_duration_seconds', 'Duration of FFmpeg processes')
@@ -30,8 +35,8 @@ class FFmpegManager:
         self._backoff_factor = 1.0
 
     async def _collect_process_stats(self) -> Dict:
-        stats = {'cpu_total': 0.0, 'memory_total': 0, 'process_count': len(self.active_processes)}
-        for path, proc in list(self.active_processes.items()):
+        stats = {'cpu_total': 0.0, 'memory_total': 0, 'process_count': len(self._active_processes)}
+        for path, proc in list(self._active_processes.items()):
             try:
                 process = psutil.Process(proc.pid)
                 cpu = process.cpu_percent()
@@ -39,7 +44,7 @@ class FFmpegManager:
                 stats['cpu_total'] += cpu
                 stats['memory_total'] += memory
             except psutil.NoSuchProcess:
-                self.active_processes.pop(path, None)
+                self._active_processes.pop(path, None)
         return stats
 
     async def _monitor_resources(self) -> None:
@@ -97,10 +102,10 @@ class FFmpegManager:
             'ffmpeg',
             '-re',
             '-i', job.media_path,
-            '-vf', f'scale={self.video_width}:{self.video_height}',
+            '-vf', f'scale={self.config.width}:{self.config.height}',
             '-f', 's16le',
-            '-loglevel', self.loglevel,
-            self.virtual_cam
+            '-loglevel', 'error',
+            self.config.hwaccel
         ]
         start_time = time.time()
         try:
@@ -110,7 +115,7 @@ class FFmpegManager:
                 stderr=asyncio.subprocess.PIPE,
                 preexec_fn=os.setsid
             )
-            self.active_processes[job.media_path] = process
+            self._active_processes[job.media_path] = process
             _, stderr = await process.communicate()
             duration = time.time() - start_time
             self._process_duration.observe(duration)
@@ -119,9 +124,10 @@ class FFmpegManager:
                 raise StreamingError(f"FFmpeg process failed for {job.media_path}")
         except Exception as e:
             logger.exception(f"Error during FFmpeg execution: {e}")
+            FFMPEG_ERRORS.inc()
             raise StreamingError(str(e)) from e
         finally:
-            self.active_processes.pop(job.media_path, None)
+            self._active_processes.pop(job.media_path, None)
 
     async def _start_process_with_limits(self, command: list) -> asyncio.subprocess.Process:
         env = self._prepare_process_environment()
@@ -148,25 +154,71 @@ class FFmpegManager:
             '-re',
             '-i', media_path,
             '-b:v', bitrate,
-            '-vf', f'scale={self.video_width}:{self.video_height}',
+            '-vf', f'scale={self.config.width}:{self.config.height}',
             '-f', 's16le',
             'pipe:1'
         ]
 
+    async def create_stream_process(self, url: str, bitrate: int) -> asyncio.subprocess.Process:
+        try:
+            cmd = self._build_command(url, bitrate)
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            self._active_processes[url] = process
+            STREAM_QUALITY.set(bitrate / 1000)  # Convert to kbps
+            return process
+            
+        except Exception as e:
+            FFMPEG_ERRORS.inc()
+            logger.error(f"FFmpeg process creation failed: {e}")
+            raise
+
+    def _build_command(self, url: str, bitrate: int) -> list[str]:
+        return [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-hwaccel", self.config.hwaccel,
+            "-thread_queue_size", str(self.config.thread_queue_size),
+            "-i", url,
+            "-c:v", "libx264",
+            "-preset", self.config.preset,
+            "-b:v", f"{bitrate}k",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-f", "matroska",
+            "-"
+        ]
+
     async def stop_stream(self, media_path: str) -> None:
-        if media_path in self.active_processes:
-            process = self.active_processes[media_path]
+        if media_path in self._active_processes:
+            process = self._active_processes[media_path]
             try:
                 process.terminate()
                 await asyncio.wait_for(process.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            self.active_processes.pop(media_path, None)
+            self._active_processes.pop(media_path, None)
         else:
             logger.warning(f"No active FFmpeg process found for {media_path}.")
 
+    async def stop_stream(self, url: str) -> None:
+        if url in self._active_processes:
+            process = self._active_processes[url]
+            try:
+                process.terminate()
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+            finally:
+                del self._active_processes[url]
+
     async def cleanup(self) -> None:
         self._shutdown_event.set()
-        tasks = [self.stop_stream(media) for media in list(self.active_processes.keys())]
+        tasks = [self.stop_stream(media) for media in list(self._active_processes.keys())]
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Cleaned up all FFmpeg processes.")
