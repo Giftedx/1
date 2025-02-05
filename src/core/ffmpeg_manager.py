@@ -33,6 +33,14 @@ class FFmpegManager:
         self._process_duration = Summary('ffmpeg_process_duration_seconds', 'Duration of FFmpeg processes')
         self._stream_cache = TTLCache(maxsize=100, ttl=300)
         self._backoff_factor = 1.0
+        self._process_monitor = asyncio.create_task(self._monitor_resources())
+        self._error_backoff = 1.0
+        self._last_error_time = 0
+        self._process_semaphore = asyncio.Semaphore(5)
+        self._stream_queue = asyncio.PriorityQueue()
+        self._adaptive_quality = True
+        self._quality_monitor = asyncio.create_task(self._monitor_stream_quality())
+        self._stream_stats = TTLCache(maxsize=100, ttl=300)
 
     async def _collect_process_stats(self) -> Dict:
         stats = {'cpu_total': 0.0, 'memory_total': 0, 'process_count': len(self._active_processes)}
@@ -67,18 +75,20 @@ class FFmpegManager:
             await asyncio.sleep(5)
 
     async def stream_media(self, media_path: str, quality: str, priority: int = 1) -> AsyncGenerator[None, None]:
-        cache_key = f"{media_path}:{quality}"
-        if cached_stream := self._stream_cache.get(cache_key):
-            yield from cached_stream
-            return
-        # Acquire a processing slot; placeholder for scheduler logic.
-        command = self._build_optimized_command(media_path, quality)
-        process = await self._start_process_with_limits(command)
+        if time.time() - self._last_error_time < self._error_backoff:
+            raise StreamingError("Rate limiting active due to recent errors")
+        
         try:
-            yield process
-        finally:
-            # Release scheduler slot as needed.
-            pass
+            async with self._semaphore:
+                command = self._build_optimized_command(media_path, quality)
+                process = await self._start_process_with_limits(command)
+                yield process
+                self._error_backoff = max(1.0, self._error_backoff * 0.9)
+        except Exception as e:
+            self._last_error_time = time.time()
+            self._error_backoff = min(300, self._error_backoff * 2)
+            logger.error(f"Streaming error: {e}", exc_info=True)
+            raise
 
     @asynccontextmanager
     async def stream_session(self, media_path: str, quality: str, priority: int = 1):
@@ -148,16 +158,42 @@ class FFmpegManager:
         }
 
     def _build_optimized_command(self, media_path: str, quality: str) -> list:
-        bitrate = "1500k" if quality == "medium" else "3000k"
+        # Enhanced FFmpeg command with better quality and performance
+        bitrate = self._get_adaptive_bitrate(quality)
         return [
             'ffmpeg',
-            '-re',
+            '-hide_banner',
+            '-loglevel', 'error',
+            '-hwaccel', self.config.hwaccel,
+            '-thread_queue_size', str(self.config.thread_queue_size),
             '-i', media_path,
+            '-c:v', 'libx264',
+            '-preset', self.config.preset,
             '-b:v', bitrate,
-            '-vf', f'scale={self.config.width}:{self.config.height}',
-            '-f', 's16le',
+            '-maxrate', f"{int(bitrate[:-1]) * 1.5}k",
+            '-bufsize', f"{int(bitrate[:-1]) * 2}k",
+            '-profile:v', 'high',
+            '-level', '4.1',
+            '-crf', '23',
+            '-movflags', '+faststart',
+            '-g', '30',
+            '-keyint_min', '30',
+            '-sc_threshold', '0',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-ar', '48000',
+            '-ac', '2',
+            '-f', 'matroska',
             'pipe:1'
         ]
+
+    def _get_adaptive_bitrate(self, quality: str) -> str:
+        quality_presets = {
+            'low': '1500k',
+            'medium': '3000k',
+            'high': '5000k'
+        }
+        return quality_presets.get(quality, '3000k')
 
     async def create_stream_process(self, url: str, bitrate: int) -> asyncio.subprocess.Process:
         try:
@@ -222,3 +258,10 @@ class FFmpegManager:
         tasks = [self.stop_stream(media) for media in list(self._active_processes.keys())]
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Cleaned up all FFmpeg processes.")
+
+    async def _monitor_stream_quality(self):
+        while not self._shutdown_event.is_set():
+            for path, stats in self._stream_stats.items():
+                if stats['errors'] > 3:
+                    await self._adjust_stream_quality(path)
+            await asyncio.sleep(10)

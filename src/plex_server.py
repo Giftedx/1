@@ -9,6 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from prometheus_client import Counter, Histogram
 from functools import lru_cache
 from contextlib import asynccontextmanager
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,9 @@ class PlexServer:
         }
         self._connection_pool = None  # Replace with your async pool if needed.
         self._request_semaphore = asyncio.Semaphore(5)
-        self._media_cache = {}  # Replace with a TTLCache implementation.
+        self._media_cache = TTLCache(maxsize=1000, ttl=300)
+        self._connection_semaphore = asyncio.Semaphore(10)
+        self._reconnect_delay = 1.0
 
     @asynccontextmanager
     async def _plex_session(self):
@@ -78,12 +81,20 @@ class PlexServer:
             raise
 
     async def search_media(self, query: str):
-        logger.info(f"Searching Plex for media: {query}")
-        media = await asyncio.to_thread(self.server.library.search, query)
-        if not media:
-            raise MediaNotFoundError(f"Media not found for query: {query}")
-        item = media[0]
-        return {"title": item.title, "media_path": item.media[0].file, "quality": "medium"}
+        cache_key = f"search:{query}"
+        if cache_key in self._media_cache:
+            return self._media_cache[cache_key]
+
+        async with self._connection_semaphore:
+            try:
+                result = await self._search_with_retry(query)
+                self._media_cache[cache_key] = result
+                self._reconnect_delay = max(1.0, self._reconnect_delay * 0.9)
+                return result
+            except Exception as e:
+                self._reconnect_delay = min(60.0, self._reconnect_delay * 2)
+                logger.error(f"Plex search error: {e}", exc_info=True)
+                raise
 
     async def search_and_validate(self, query: str) -> dict:
         return await self.search_media(query)

@@ -10,26 +10,26 @@ data:
   BACKUP_DIR: /backup
   BACKUP_RETENTION_DAYS: "7"
   REDIS_CONFIG: |
-    # Advanced performance tuning
-    maxmemory 6gb
-    maxmemory-policy volatile-lfu
-    maxmemory-samples 15
+    # Performance tuning
+    maxmemory 8gb
+    maxmemory-policy volatile-lru
+    maxmemory-samples 20
     
-    # Enhanced I/O settings
-    io-threads 8
+    # I/O optimization
+    io-threads 12
     io-threads-do-reads yes
     dynamic-hz yes
     
-    # Improved persistence techniques
+    # Enhanced persistence
     aof-use-rdb-preamble yes
     rdb-save-incremental-fsync yes
     
-    # Memory optimization tuning
-    active-defrag-ignore-bytes 100mb
-    active-defrag-cycle-min 15
+    # Memory optimization
+    active-defrag-ignore-bytes 200mb
+    active-defrag-cycle-min 25
     jemalloc-bg-thread yes
     
-    # Connection tuning parameters
-    tcp-keepalive 45
-    tcp-backlog 2048
-    maxclients 15000
+    # Connection optimization
+    tcp-keepalive 30
+    tcp-backlog 4096
+    maxclients 20000

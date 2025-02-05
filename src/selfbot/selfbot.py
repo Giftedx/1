@@ -18,6 +18,11 @@ class SelfBotClient(discord.Client):
         self.ffmpeg_manager = ffmpeg_manager
         self.voice_client = None
         self._voice_channel_id = None  # Set or update as needed
+        self._stream_retries = {}
+        self._max_retries = 3
+        self._retry_delay = 2.0
+        self._voice_states = {}
+        self._reconnect_attempts = {}
 
     async def on_ready(self):
         logger.info(f"Selfbot logged in as {self.user}")
@@ -62,26 +67,47 @@ class SelfBotClient(discord.Client):
             logger.info("Left voice channel.")
 
     async def play_media_in_voice(self, media_path: str, quality: str = "medium"):
-        if not self.voice_client:
-            logger.info("No active voice connection; attempting to join.")
-            await self.join_voice(channel_id=self._voice_channel_id or 1234567890)
-            if not self.voice_client:
-                logger.error("Unable to join voice channel; aborting playback.")
-                return
         try:
+            if not self.voice_client:
+                await self._ensure_voice_connection()
+            
+            stream_options = {
+                'before_options': (
+                    '-reconnect 1 -reconnect_streamed 1 '
+                    '-reconnect_delay_max 5 -nostdin'
+                ),
+                'options': (
+                    '-vn -b:a 192k -bufsize 4096k '
+                    '-ac 2 -ar 48000'
+                )
+            }
+            
             audio_source = discord.FFmpegPCMAudio(
                 media_path,
                 executable="ffmpeg",
-                before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+                **stream_options
             )
-            self.voice_client.play(audio_source)
-            while self.voice_client.is_playing():
-                await asyncio.sleep(0.5)
-            logger.info("Media streaming completed.")
+            
+            self.voice_client.play(
+                discord.PCMVolumeTransformer(audio_source, volume=1.0),
+                after=lambda e: self._handle_playback_completed(e, media_path)
+            )
         except Exception as e:
-            logger.error(f"Error during media streaming: {e}", exc_info=True)
-        finally:
-            await self.leave_voice()
+            logger.error(f"Playback error: {e}", exc_info=True)
+            await self._handle_playback_error(e, media_path)
+
+    async def _ensure_voice_connection(self):
+        try:
+            channel = self.get_channel(self._voice_channel_id)
+            if not channel:
+                raise ValueError("Invalid voice channel")
+            self.voice_client = await channel.connect(timeout=20.0, reconnect=True)
+            self.voice_client.pause()  # Ensure clean state
+            await asyncio.sleep(0.5)  # Brief pause to stabilize
+            self.voice_client.resume()
+        except Exception as e:
+            logger.error(f"Voice connection error: {e}", exc_info=True)
+            raise
 
 def main():
     from src.core.ffmpeg_manager import FFmpegManager  # Import here if necessary

@@ -84,6 +84,11 @@ class MediaStreamingBot(commands.Bot):
             max_retries=3,
             backoff_factor=1.5
         )
+        self._command_queue = asyncio.Queue()
+        self._command_workers = []
+        self._max_concurrent_commands = 5
+        self._command_semaphore = asyncio.Semaphore(10)
+        self._command_timeouts = {}
 
     @asynccontextmanager
     async def graceful_shutdown(self) -> AsyncIterator[None]:
@@ -117,6 +122,11 @@ class MediaStreamingBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         try:
+            # Start command workers
+            for _ in range(self._max_concurrent_commands):
+                worker = asyncio.create_task(self._command_worker())
+                self._command_workers.append(worker)
+            
             # Initialize dependency container and services
             self.redis_manager = await provide_redis_manager(self.config)
             self.plex_server = await provide_plex_server(self.config)
@@ -159,6 +169,17 @@ class MediaStreamingBot(commands.Bot):
         except Exception as e:
             logger.error(f"Failed to initialize bot: {e}", exc_info=True)
             raise
+
+    async def _command_worker(self):
+        while True:
+            cmd, ctx = await self._command_queue.get()
+            try:
+                async with self._error_handler.handle_errors():
+                    await self._execute_command(cmd, ctx)
+            except Exception as e:
+                logger.error(f"Command execution error: {e}", exc_info=True)
+            finally:
+                self._command_queue.task_done()
 
     def _handle_signal(self) -> None:
         self._shutdown_event.set()
@@ -236,8 +257,19 @@ class MediaStreamingBot(commands.Bot):
     async def process_commands(self, message: discord.Message) -> None:
         if message.author.bot:
             return
-        if await self.rate_limiter.is_rate_limited(str(message.author.id)):
-            await message.channel.send("You are being rate limited. Please try again later.")
-            return
-        # Directly process the command using the default implementation.
-        await super().process_commands(message)
+
+        async with self._command_semaphore:
+            cmd_key = f"{message.author.id}:{message.content}"
+            
+            # Check command cooldown
+            if self._command_timeouts.get(cmd_key, 0) > time.time():
+                await message.channel.send("Please wait before using this command again.")
+                return
+                
+            try:
+                self._command_timeouts[cmd_key] = time.time() + self.config.COMMAND_COOLDOWN
+                await super().process_commands(message)
+            except Exception as e:
+                logger.error(f"Command processing error: {e}", exc_info=True)
+                self._errors.labels(type=type(e).__name__).inc()
+                await message.channel.send("An error occurred processing your command.")

@@ -17,20 +17,15 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: ingress-nginx
-      podSelector:
-        matchLabels:
-          app.kubernetes.io/component: controller
     ports:
     - protocol: TCP
       port: 9090
-    - protocol: TCP
-      port: 9091
+      endPort: 9091
   egress:
   - to:
     - podSelector:
         matchLabels:
           app: redis
-          role: primary
     ports:
     - protocol: TCP
       port: 6379
@@ -40,8 +35,10 @@ spec:
           name: monitoring
     ports:
     - protocol: TCP
-      port: 9091
+      port: 9090
       endPort: 9093
+
+  # Add DNS resolution
   - to:
     - namespaceSelector:
         matchLabels:
@@ -51,8 +48,6 @@ spec:
           k8s-app: kube-dns
     ports:
     - protocol: UDP
-      port: 53
-    - protocol: TCP
       port: 53
 
 ---

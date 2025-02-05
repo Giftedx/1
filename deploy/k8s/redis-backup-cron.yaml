@@ -32,6 +32,9 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
+                  
+                  # Enhanced error handling
+                  trap 'echo "Error on line $LINENO"; exit 1' ERR
 
                   if [ -z "${BACKUP_KEY:-}" ]; then
                     echo "BACKUP_KEY is not set"
