@@ -10,11 +10,11 @@ services:
       - REDIS_URL=redis://redis:6379
       - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
     ports:
-      - "8080:8080"
+      - '8080:8080'
     depends_on:
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -28,13 +28,13 @@ services:
       - PLEX_TOKEN=${PLEX_TOKEN}
       - REDIS_URL=redis://redis:6379
       - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
-    command: ["python", "-m", "src.discord_selfbot"]
+    command: ['python', '-m', 'src.discord_selfbot']
     ports:
-      - "9090:9090"
+      - '9090:9090'
     depends_on:
       - redis
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      test: ['CMD', 'curl', '-f', 'http://localhost:9090/health']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -42,9 +42,9 @@ services:
   redis:
     image: redis:7
     container_name: media_redis
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 30s
       timeout: 5s
       retries: 3

@@ -3,8 +3,8 @@ kind: Deployment
 metadata:
   name: redis
   annotations:
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "9121"
+    prometheus.io/scrape: 'true'
+    prometheus.io/port: '9121'
 spec:
   replicas: 3
   selector:
@@ -22,89 +22,89 @@ spec:
         runAsUser: 999
         runAsNonRoot: true
       containers:
-      - name: redis
-        image: redis:7.0-alpine
-        imagePullPolicy: IfNotPresent
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop: ["ALL"]
-        args:
-        - "--requirepass"
-        - "$(REDIS_PASSWORD)"
-        # Enhanced Redis configuration
-        - "--maxmemory"
-        - "400mb"
-        - "--maxmemory-policy"
-        - "volatile-lfu"
-        - "--io-threads"
-        - "4"
-        - "--active-defrag-cycle-min"
-        - "25"
-        - "--active-defrag-cycle-max"
-        - "75"
-        - "--active-defrag-ignore-bytes"
-        - "64mb"
-        - "--active-defrag-threshold-lower"
-        - "10"
-        - "--client-output-buffer-limit"
-        - "normal 0 0 0"
-        - "--lua-time-limit"
-        - "5000"
-        - "--maxmemory-samples"
-        - "10"
-        - "--active-defrag-max-scan-fields"
-        - "1000"
-        - "--io-threads-do-reads"
-        - "yes"
-        - "--tcp-keepalive"
-        - "60"
-        - "--lazyfree-lazy-user-del"
-        - "yes"
-        - "--latency-monitor-threshold"
-        - "25"
-        - "--activedefrag"
-        - "yes"
-        - "--rdb-save-incremental-fsync"
-        - "yes"
-        env:
-        - name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: redis-secret
-              key: password
-        # Memory optimization
-        - name: MALLOC_ARENA_MAX
-          value: "2"
-        resources:
-          limits:
-            memory: "512Mi"                # Adjusted memory limit
-            cpu: "500m"                    # Adjusted CPU limit
-          requests:
-            memory: "256Mi"                # Adjusted memory request
-            cpu: "250m"                    # Adjusted CPU request
-        ports:
-        - containerPort: 6379
-        volumeMounts:
-        - mountPath: /data
-          name: redis-data
-        startupProbe:
-          tcpSocket:
-            port: 6379
-          periodSeconds: 10
-          failureThreshold: 30
-        readinessProbe:
-          tcpSocket:
-            port: 6379
-          initialDelaySeconds: 5
-          periodSeconds: 3
-        livenessProbe:
-          tcpSocket:
-            port: 6379
-          initialDelaySeconds: 15
-          periodSeconds: 5
+        - name: redis
+          image: redis:7.0-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']
+          args:
+            - '--requirepass'
+            - '$(REDIS_PASSWORD)'
+            # Enhanced Redis configuration
+            - '--maxmemory'
+            - '400mb'
+            - '--maxmemory-policy'
+            - 'volatile-lfu'
+            - '--io-threads'
+            - '4'
+            - '--active-defrag-cycle-min'
+            - '25'
+            - '--active-defrag-cycle-max'
+            - '75'
+            - '--active-defrag-ignore-bytes'
+            - '64mb'
+            - '--active-defrag-threshold-lower'
+            - '10'
+            - '--client-output-buffer-limit'
+            - 'normal 0 0 0'
+            - '--lua-time-limit'
+            - '5000'
+            - '--maxmemory-samples'
+            - '10'
+            - '--active-defrag-max-scan-fields'
+            - '1000'
+            - '--io-threads-do-reads'
+            - 'yes'
+            - '--tcp-keepalive'
+            - '60'
+            - '--lazyfree-lazy-user-del'
+            - 'yes'
+            - '--latency-monitor-threshold'
+            - '25'
+            - '--activedefrag'
+            - 'yes'
+            - '--rdb-save-incremental-fsync'
+            - 'yes'
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
+            # Memory optimization
+            - name: MALLOC_ARENA_MAX
+              value: '2'
+          resources:
+            limits:
+              memory: '512Mi' # Adjusted memory limit
+              cpu: '500m' # Adjusted CPU limit
+            requests:
+              memory: '256Mi' # Adjusted memory request
+              cpu: '250m' # Adjusted CPU request
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - mountPath: /data
+              name: redis-data
+          startupProbe:
+            tcpSocket:
+              port: 6379
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 15
+            periodSeconds: 5
       volumes:
-      - name: redis-data
-        persistentVolumeClaim:
-          claimName: redis-backup-data
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-backup-data

@@ -3,11 +3,11 @@ kind: CronJob
 metadata:
   name: redis-backup
   annotations:
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "9091"
-    backup.kubernetes.io/deltas: "daily=7,weekly=4,monthly=6"
+    prometheus.io/scrape: 'true'
+    prometheus.io/port: '9091'
+    backup.kubernetes.io/deltas: 'daily=7,weekly=4,monthly=6'
 spec:
-  schedule: "0 */4 * * *" # Every 4 hours
+  schedule: '0 */4 * * *' # Every 4 hours
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
   concurrencyPolicy: Forbid
@@ -32,7 +32,7 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
-                  
+
                   # Enhanced error handling
                   trap 'echo "Error on line $LINENO"; exit 1' ERR
 
@@ -40,7 +40,7 @@ spec:
                     echo "BACKUP_KEY is not set"
                     exit 1
                   fi
-                  
+
                   BACKUP_DATE=$(date +%Y%m%d-%H%M%S)
                   BACKUP_FILE="dump-${BACKUP_DATE}.rdb"
 
@@ -139,11 +139,11 @@ spec:
                   echo "Backup process completed successfully"
               resources:
                 requests:
-                  memory: "256Mi"
-                  cpu: "250m"
+                  memory: '256Mi'
+                  cpu: '250m'
                 limits:
-                  memory: "512Mi"
-                  cpu: "500m"
+                  memory: '512Mi'
+                  cpu: '500m'
               ports:
                 - containerPort: 9091
                   name: metrics

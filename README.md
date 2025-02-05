@@ -1,7 +1,9 @@
 # Media Bot Production‑Grade System
 
 ## Overview
+
 This project provides:
+
 - A Discord Bot for command processing and Plex integration.
 - A Discord Self‑bot for handling video media playback in voice channels.
 - A production‑grade architecture with robust error handling, scalability, and an elegant UI dashboard.
@@ -10,6 +12,7 @@ This project provides:
 
 1. **Environment Variables**  
    Create a copy of `.env.example` to `.env` and update the following:
+
    - `BOT_TOKEN` or `STREAMING_BOT_TOKEN`
    - `PLEX_URL` and `PLEX_TOKEN`
    - `REDIS_URL`
@@ -18,6 +21,7 @@ This project provides:
 
 2. **Dependencies**  
    Install Python dependencies:
+
    ```bash
    pip install -r requirements.txt
    ```
@@ -31,6 +35,7 @@ This project provides:
 ## Containerization
 
 1. **Docker Build**
+
    ```bash
    docker build -t media-app .
    ```
