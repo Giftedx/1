@@ -9,10 +9,21 @@ services:
       - PLEX_TOKEN=${PLEX_TOKEN}
       - COMMAND_PREFIX=${COMMAND_PREFIX}
       - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
+      - REDIS_URL=redis://redis:6379
     ports:
       - "8080:8080"
     depends_on:
       - redis
+    networks:
+      - app-network
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "10"
 
   redis:
     image: redis:7
@@ -20,6 +31,10 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
 
 volumes:
   redis-data:
