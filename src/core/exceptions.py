@@ -10,10 +10,8 @@ class QueueError(MediaBotError):
     """Base class for queue-related errors."""
     pass
 
-class QueueFullError(QueueError):
-    """Raised when the media queue is full."""
-    def __init__(self, message: str = "Queue is full"):
-        super().__init__(message, "QUEUE_FULL")
+class QueueFullError(Exception):
+    pass
 
 class QueueEmptyError(QueueError):
     """Raised when attempting to access an empty queue."""
@@ -40,12 +38,10 @@ class PermissionDeniedError(MediaBotError):
     """Raised when permission is denied."""
     pass
 
-class RateLimitExceededError(MediaBotError):
-    """Raised when a rate limit is exceeded."""
+class RateLimitExceededError(Exception):
     pass
 
-class MediaNotFoundError(MediaBotError):
-    """Raised when the requested media is not found."""
+class MediaNotFoundError(Exception):
     pass
 
 class ResourceExhaustedError(MediaBotError):

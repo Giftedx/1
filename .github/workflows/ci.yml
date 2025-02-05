@@ -1,23 +1,13 @@
-# This workflow automates the CI/CD process for the discord-media-bot project.
-# It runs on pushes and pull requests to the main branch, setting up Python,
-# installing dependencies, running security scans, executing tests with coverage,
-# and checking for bugs such as null pointer references, unhandled exceptions, and more.
-
 name: Production CI/CD
 
-# Define the events that trigger this workflow.
-# In this case, we trigger this workflow on pushes and pull requests to the main branch.
 on:
   push:
-    # Trigger on pushes to the main branch.
     branches: [ main ]
   pull_request:
-    # Trigger on pull requests to the main branch.
     branches: [ main ]
   schedule:
-    - cron: '0 0 * * 0'  # Weekly security scan
+    - cron: '0 0 * * 0'
 
-# Define the job that this workflow does.
 jobs:
   security-audit:
     runs-on: ubuntu-latest
@@ -25,18 +15,15 @@ jobs:
       matrix:
         python-version: [3.11]
       fail-fast: false
-    
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-
+          cache: pip
       - name: Run security audit
         uses: snyk/actions/python@master
         env:
@@ -47,7 +34,6 @@ jobs:
             --all-projects
             --detection-depth=4
             --sarif-file-output=snyk.sarif
-
       - name: Cache Security DBs
         uses: actions/cache@v3
         with:
@@ -58,26 +44,20 @@ jobs:
           key: ${{ runner.os }}-security-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-security-
-
       - name: Run enhanced security checks
         run: |
-          # Install security tools
           pip install bandit safety semgrep pre-commit
-          
-          # Run comprehensive checks
           pre-commit run --all-files
           bandit -r . -ll -iii --exclude tests/ -f json -o bandit-results.json
           safety check --full-report --json > safety-report.json
           semgrep scan --config=p/security-audit --json > semgrep-results.json
-          
-          # Run Trivy with enhanced options
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          trivy fs --security-checks vuln,config,secret \
-                   --ignore-unfixed \
-                   --exit-code 1 \
-                   --cache-dir .trivycache \
-                   --severity HIGH,CRITICAL \
-                   --format json > trivy-results.json .
+          trivy fs --security-checks vuln,config,secret --ignore-unfixed --exit-code 1 --cache-dir .trivycache --severity HIGH,CRITICAL --format json > trivy-results.json .
+      - name: Upload security results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
 
   security-scan:
     runs-on: ubuntu-latest
@@ -85,10 +65,8 @@ jobs:
       matrix:
         python-version: [3.11]
       fail-fast: false
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Cache vulnerability DBs
         uses: actions/cache@v3
         with:
@@ -98,32 +76,28 @@ jobs:
           key: ${{ runner.os }}-vuln-${{ hashFiles('requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-vuln-
-
       - name: Run comprehensive security scan
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: 'fs'
+          scan-type: fs
           ignore-unfixed: true
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-results.sarif
           timeout: '10m'
           cache-dir: .trivycache
-
       - name: Enhanced OWASP Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
-          project: 'discord-media-bot'
-          path: '.'
-          format: 'HTML,SARIF,JSON'
+          project: discord-media-bot
+          path: .
+          format: HTML,SARIF,JSON
           failOnCVSS: 7
           enableExperimental: true
           additionalArguments: >
             --suppression suppression.xml
             --nodeAuditSkipDevDependencies
             --nodePackageSkipDevDependencies
-
-      # Upload all security reports
       - name: Upload security results
         uses: github/codeql-action/upload-sarif@v2
         if: always()
@@ -132,84 +106,67 @@ jobs:
 
   build-test-deploy:
     needs: [security-audit, security-scan]
-    # Run this job on an ubuntu-latest environment.
     runs-on: ubuntu-latest
     environment: production
-
-    # Define the steps that this job takes.
     steps:
-      # Checkout the repository so that we can run tests on the code.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # Cache Python dependencies
+      - name: Set environment for bot mode
+        run: echo "SERVICE_MODE=bot" >> .env
       - name: Cache pip packages
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('requirements.txt') }}
           restore-keys: pip-
-
-      # Set up the Python environment.
-      # This step installs Python and sets up the environment so that we can run Python code.
       - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          # The version of Python to use.
           python-version: '3.11'
-          cache: 'pip'
-
-      # Install the dependencies so that we can run tests.
-      # This step installs the dependencies listed in requirements.txt.
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install --no-cache-dir -r requirements.txt
-
-      # Added more comprehensive security checks
       - name: Run security checks
         run: |
           pip install bandit safety pysa semgrep
           bandit -r . -ll -iii --exclude tests/
           safety check --full-report
           semgrep scan --config=p/security-audit
-          
-      # Run type checking.
+      - name: Run comprehensive security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-results.sarif
+          timeout: '10m'
+          cache-dir: .trivycache
       - name: Type checking
         run: |
           pip install mypy types-all
           mypy src/ --strict --warn-unused-configs --disallow-untyped-defs
-
-      # Run the tests with coverage.
-      # This step runs the tests with coverage so that we can see which lines of code are executed.
       - name: Run tests with coverage
         run: |
-          pip install pytest pytest-cov pytest-asyncio pytest-xdist pytest-sugar
-          pytest -v -n auto --cov=src --cov-report=xml --cov-report=html --cov-branch --cov-fail-under=85
-
-      # Upload coverage reports to Codecov.
-      # This step uploads the coverage reports to Codecov so that we can see the coverage reports.
+          pytest -v -n auto --cov=src --cov-report=xml --cov-report=html --cov-fail-under=85
       - name: Upload coverage reports
         uses: codecov/codecov-action@v3
         with:
           files: ./coverage.xml
           flags: unittests
           fail_ci_if_error: true
-
-      # Cache Docker layers
       - name: Cache Docker layers
         uses: actions/cache@v3
         with:
           path: /tmp/.buildx-cache
           key: buildx-${{ github.sha }}
           restore-keys: buildx-
-
-      # Added container scanning and signing
       - name: Set up Docker Buildx
         if: github.ref == 'refs/heads/main'
         uses: docker/setup-buildx-action@v3
-
       - name: Build and scan Docker image
         if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v5
@@ -220,38 +177,24 @@ jobs:
           tags: media-app:latest
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
-
       - name: Scan Docker image
         if: github.ref == 'refs/heads/main'
         run: |
           trivy image --severity HIGH,CRITICAL --ignore-unfixed media-app:latest
-
       - name: Run performance tests
         run: |
           pip install locust
           locust --headless -f tests/performance/locustfile.py --users 50 --spawn-rate 5 -H http://localhost:9090 --run-time 1m
-
       - name: Docker security scan
         if: github.ref == 'refs/heads/main'
         run: |
           docker scout cves media-app:latest
           docker scout recommendations media-app:latest
-
       - name: Performance benchmarking
         run: |
           pip install locust
-          locust --headless -f tests/performance/locustfile.py \
-                 --users 100 \
-                 --spawn-rate 10 \
-                 --run-time 5m \
-                 --html performance-report.html
-
+          locust --headless -f tests/performance/locustfile.py --users 100 --spawn-rate 10 --run-time 5m --html performance-report.html
       - name: Advanced security scanning
         run: |
-          trivy fs --security-checks vuln,config,secret \
-                   --ignore-unfixed \
-                   --exit-code 1 \
-                   --severity HIGH,CRITICAL .
-                   
-          grype dir:. --fail-on high \
-                      --config grype.yaml
+          trivy fs --security-checks vuln,config,secret --ignore-unfixed --exit-code 1 --severity HIGH,CRITICAL .
+          grype dir:. --fail-on high --config grype.yaml

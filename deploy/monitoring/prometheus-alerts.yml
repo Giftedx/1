@@ -9,7 +9,6 @@ groups:
     annotations:
       summary: "High error rate detected"
       description: "Error rate exceeds 10% over 5 minutes"
-      
   - alert: CircuitBreakerOpen
     expr: circuit_breaker_state == 2
     for: 5m
@@ -18,49 +17,44 @@ groups:
     annotations:
       summary: "Circuit breaker open"
       description: "Service circuit breaker has been open for 5 minutes"
-
   - alert: RedisBackupFailure
-    expr: redis_backup_success_timestamp offset 7h < 0
+    expr: time() - redis_backup_success_timestamp > 7 * 3600
     for: 1h
     labels:
-      severity: warning
+      severity: critical
     annotations:
-      summary: "Redis backup failed"
+      summary: "Backup validation failure"
       description: "No successful backup in the last 7 hours"
-
   - alert: HighMemoryUsage
-    expr: container_memory_usage_bytes{container="media-bot"} / container_spec_memory_limit_bytes{container="media-bot"} > 0.85
+    expr: container_memory_usage_bytes{container="media-bot"} / container_spec_memory_limit_bytes{container="media-bot"} > 0.9
     for: 15m
     labels:
       severity: warning
     annotations:
-      summary: "High memory usage"
-      description: "Container using > 85% of memory limit"
-
+      summary: "High memory usage detected"
+      description: "Container using > 90% of its memory limit"
   - alert: PodRestarting
-    expr: changes(kube_pod_container_status_restarts_total{container="media-bot"}[1h]) > 2
+    expr: changes(kube_pod_container_status_restarts_total{container="media-bot"}[1h]) > 3
     labels:
       severity: warning
     annotations:
-      summary: "Pod restarting frequently"
-
+      summary: "Frequent Pod restarts"
+      description: "Pod restarted more than 3 times in the past hour"
   - alert: RedisMemoryUsage
-    expr: redis_memory_used_bytes / redis_total_system_memory_bytes * 100 > 85
+    expr: redis_memory_used_bytes / redis_total_system_memory_bytes * 100 > 90
     for: 15m
     labels:
       severity: warning
     annotations:
-      summary: "Redis high memory usage"
-      description: "Redis memory usage is {{ $value }}%"
-      
+      summary: "High Redis memory usage"
+      description: "Redis memory usage is above 90%"
   - alert: BackupValidationFailed
     expr: increase(redis_backup_validation_failures_total[1d]) > 0
     labels:
       severity: critical
     annotations:
-      summary: "Backup validation failed"
-      description: "Redis backup validation has failed"
-
+      summary: "Backup validation failure"
+      description: "At least one backup validation failure occurred in the past day"
   - alert: SlowHealthChecks
     expr: rate(health_check_duration_seconds_sum[5m]) / rate(health_check_duration_seconds_count[5m]) > 0.5
     for: 5m
@@ -69,7 +63,6 @@ groups:
     annotations:
       summary: "Slow health checks detected"
       description: "Health checks taking longer than 500ms on average"
-
   - alert: HighRedisLatency
     expr: redis_command_duration_seconds_sum / redis_command_duration_seconds_count > 0.01
     for: 5m
@@ -78,7 +71,6 @@ groups:
     annotations:
       summary: "High Redis latency"
       description: "Redis commands taking longer than 10ms on average"
-
   - alert: HighLatencySpikes
     expr: rate(http_request_duration_seconds_bucket{le="0.5"}[5m]) < 0.95
     for: 5m
@@ -87,7 +79,6 @@ groups:
     annotations:
       summary: "High latency detected"
       description: "More than 5% of requests are taking longer than 500ms"
-
   - alert: HighCPUThrottling
     expr: rate(container_cpu_cfs_throttled_seconds_total{container="media-bot"}[5m]) > 0
     for: 15m
@@ -95,20 +86,15 @@ groups:
       severity: warning
     annotations:
       summary: "CPU throttling detected"
-
-  # Add memory leak detection
+      description: "Containers experiencing CPU throttling over 15 minutes"
   - alert: PotentialMemoryLeak
-    expr: |
-      (container_memory_usage_bytes{container="media-bot"} - container_memory_cache{container="media-bot"})
-      / container_spec_memory_limit_bytes{container="media-bot"} > 0.75
+    expr: (container_memory_usage_bytes{container="media-bot"} - container_memory_cache{container="media-bot"}) / container_spec_memory_limit_bytes{container="media-bot"} > 0.75
     for: 30m
     labels:
       severity: warning
     annotations:
       summary: "Potential memory leak detected"
       description: "Non-cache memory usage consistently high"
-
-  # Add connection pool saturation alert
   - alert: ConnectionPoolSaturation
     expr: redis_pool_used_connections / redis_pool_max_connections > 0.8
     for: 5m

@@ -26,50 +26,47 @@ spec:
           containers:
             - name: redis-backup
               image: redis:7.0-alpine
+              imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh
                 - -c
                 - |
                   set -euo pipefail
 
-                  # Enhanced backup process
-                  BACKUP_FILE="dump-$(date +%Y%m%d-%H%M%S).rdb"
+                  if [ -z "${BACKUP_KEY:-}" ]; then
+                    echo "BACKUP_KEY is not set"
+                    exit 1
+                  fi
+                  
+                  BACKUP_DATE=$(date +%Y%m%d-%H%M%S)
+                  BACKUP_FILE="dump-${BACKUP_DATE}.rdb"
 
-                  # Use temporary directory with cleanup
                   TEMP_DIR=$(mktemp -d)
                   trap 'rm -rf ${TEMP_DIR}' EXIT
 
-                  # Improved compression and validation
+                  # Initial backup with compression and encryption
                   redis-cli --rdb ${TEMP_DIR}/${BACKUP_FILE}
-
-                  # Parallel compression
                   pigz -9 -p 2 ${TEMP_DIR}/${BACKUP_FILE}
-
-                  # Encrypt backup
                   gpg --batch --yes --symmetric --cipher-algo AES256 \
                       --passphrase "${BACKUP_KEY}" \
                       -o /backup/${BACKUP_FILE}.gpg \
                       ${TEMP_DIR}/${BACKUP_FILE}.gz
 
                   # Validate backup
-                  if ! gpg --batch --quiet --decrypt \
-                      --passphrase "${BACKUP_KEY}" \
-                      /backup/${BACKUP_FILE}.gpg > /dev/null; then
+                  if ! gpg --batch --quiet --decrypt --passphrase "${BACKUP_KEY}" /backup/${BACKUP_FILE}.gpg > /dev/null; then
                     echo "Backup validation failed"
                     exit 1
                   fi
 
-                  # Cleanup old backups
+                  # Remove old backups (only once)
                   find /backup -name "dump-*.rdb.gpg" -mtime +7 -delete
 
-                  # Enhanced locking mechanism
                   LOCK_KEY="backup_lock:$(date +%Y%m%d)"
                   if ! redis-cli -h ${REDIS_HOST} SET $LOCK_KEY $HOSTNAME NX EX 7200; then
                     echo "Backup already in progress or lock exists"
                     exit 1
                   fi
 
-                  # Enhanced error handling
                   cleanup() {
                     redis-cli -h ${REDIS_HOST} DEL $LOCK_KEY
                     rm -rf ${TEMP_DIR}
@@ -81,15 +78,11 @@ spec:
                   }
                   trap cleanup EXIT
 
-                  trap 'echo "Backup failed"; exit 1' ERR INT TERM
-
-                  # Improved health checks
                   if ! timeout 5s redis-cli -h ${REDIS_HOST} INFO | grep -q "role:master"; then
                     echo "Redis not ready or not master, aborting backup"
                     exit 1
                   fi
 
-                  # Enhanced backup with retry mechanism
                   backup_with_retry() {
                     local attempts=3
                     local wait_time=5
@@ -105,7 +98,6 @@ spec:
                     return 1
                   }
 
-                  # Optimized compression pipeline
                   compress_and_encrypt() {
                     pigz -9 -p 4 | \
                     gpg --batch --yes --symmetric \
@@ -121,10 +113,10 @@ spec:
                   gpg --symmetric --cipher-algo AES256 --batch --passphrase "${BACKUP_KEY}" \
                       --compress-algo zlib -o ${TEMP_DIR}/dump.rdb.gpg ${TEMP_DIR}/dump.rdb
 
-                  mv ${TEMP_DIR}/dump.rdb.gpg /backup/dump-$(date +%Y%m%d-%H%M%S).rdb.gpg
+                  mv ${TEMP_DIR}/dump.rdb.gpg /backup/dump-${BACKUP_DATE}.rdb.gpg
 
                   # Calculate and store checksum
-                  sha256sum /backup/dump-$(date +%Y%m%d-%H%M%S).rdb.gpg > /backup/dump-$(date +%Y%m%d-%H%M%S).rdb.gpg.sha256
+                  sha256sum /backup/dump-${BACKUP_DATE}.rdb.gpg > /backup/dump-${BACKUP_DATE}.rdb.gpg.sha256
 
                   # Enhanced metrics
                   echo "backup_success_timestamp $(date +%s)" > /tmp/metrics
@@ -141,8 +133,7 @@ spec:
                     exit 1
                   fi
 
-                  # Backup rotation
-                  find /backup -name "dump-*.rdb.gpg" -mtime +7 -delete
+                  echo "Backup process completed successfully"
               resources:
                 requests:
                   memory: "256Mi"

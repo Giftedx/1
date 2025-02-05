@@ -2,11 +2,11 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: redis-backup-storage
-provisioner: kubernetes.io/aws-ebs
+provisioner: ebs.csi.aws.com
 parameters:
   type: gp3
   encrypted: "true"
-  kmsKeyId: "${KMS_KEY_ID}"
+  kmsKeyId: "your-kms-key-id"    # Ensure valid KMS key for encryption
   iops: "4000"
   throughput: "250"
   fsType: "ext4"
@@ -31,7 +31,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi
+      storage: 10Gi   # Adjust capacity if needed for production
   volumeMode: Filesystem
 
 ---
@@ -59,6 +59,7 @@ spec:
       containers:
       - name: discord-media-bot
         image: your-registry/media-app:${IMAGE_TAG}
+        imagePullPolicy: IfNotPresent
         envFrom:
         - secretRef:
             name: media-secrets

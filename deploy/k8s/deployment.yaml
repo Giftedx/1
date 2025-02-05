@@ -47,7 +47,6 @@ spec:
         # Enhanced monitoring
         datadog.com/enable-metrics: "true"
         datadog.com/enable-profiling: "true"
-        prometheus.io/path: "/metrics"
         linkerd.io/proxy-memory-limit: "256Mi"
         vault.hashicorp.com/agent-limits-cpu: "100m"
         vault.hashicorp.com/agent-limits-memory: "128Mi"
@@ -155,31 +154,19 @@ spec:
         - name: REDIS_RETRY_BACKOFF
           value: "100"
         - name: OTEL_RESOURCE_ATTRIBUTES
-          value: "service.name=media-bot,environment=production"
-        - name: MALLOC_ARENA_MAX
-          value: "2"
-        - name: NODE_OPTIONS
-          value: "--max-old-space-size=768"
-        - name: OTEL_TRACES_SAMPLER
-          value: "parentbased_traceidratio"
-        - name: OTEL_TRACES_SAMPLER_ARG
-          value: "0.1"
-        - name: OTEL_EXPORTER_OTLP_COMPRESSION
-          value: "gzip"
-        # Enhanced environment configuration
-        - name: REDIS_POOL_CONFIG
-          value: '{"maxsize":50,"minsize":10,"timeout":30}'
-        - name: OTEL_RESOURCE_ATTRIBUTES
           value: "deployment.environment=production,service.version=${APP_VERSION}"
         - name: MALLOC_ARENA_MAX
           value: "2"
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=1024"
+        # Enhanced environment configuration
+        - name: REDIS_POOL_CONFIG
+          value: '{"maxsize":30,"minsize":5,"timeout":20}'
         # Optimized environment settings
         - name: OTEL_BATCH_PROCESSOR_QUEUE_SIZE
           value: "2048"
-        - name: REDIS_POOL_CONFIG
-          value: '{"maxsize":30,"minsize":5,"timeout":20}'
-        - name: NODE_OPTIONS
-          value: "--max-old-space-size=1024"
+        - name: APP_VERSION
+          value: "1.0.0"   # Added for version tracking
         ports:
         - containerPort: 9090
         - containerPort: 4317

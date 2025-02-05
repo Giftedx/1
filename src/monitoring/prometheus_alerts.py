@@ -26,11 +26,24 @@ class PrometheusAlerts:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def send_alert(self, message: str, alert_type: str = "general", severity: str = "warning") -> None:
         try:
-            # Implementation here
-            ALERT_COUNTER.labels(type=alert_type, severity=severity).inc()
+            session = self._session or await self._get_session()
+            async with session.post(
+                self.alert_config.get("alert_url", ""),
+                json={
+                    "message": message,
+                    "alert_type": alert_type,
+                    "severity": severity
+                }
+            ) as response:
+                if response.status not in (200, 201):
+                    ALERT_FAILURES.labels(type=alert_type).inc()
+                    raise Exception(f"Alert sending failed with status {response.status}")
+                # Optionally, record latency if available.
+                self._metrics['alert_latency'].observe(0)  # Replace 0 with measured latency if needed.
+                ALERT_COUNTER.labels(type=alert_type, severity=severity).inc()
         except Exception as e:
-            ALERT_FAILURES.inc()
-            raise
+            ALERT_FAILURES.labels(type=alert_type).inc()
+            raise e
 
     async def cleanup(self) -> None:
         if self._session and not self._session.closed:

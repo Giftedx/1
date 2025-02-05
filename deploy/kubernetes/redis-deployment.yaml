@@ -6,7 +6,7 @@ metadata:
     prometheus.io/scrape: "true"
     prometheus.io/port: "9121"
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
       app: redis
@@ -23,7 +23,8 @@ spec:
         runAsNonRoot: true
       containers:
       - name: redis
-        image: redis:alpine
+        image: redis:7.0-alpine
+        imagePullPolicy: IfNotPresent
         securityContext:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
@@ -73,15 +74,16 @@ spec:
             secretKeyRef:
               name: redis-secret
               key: password
-        - name: MALLOC_ARENA_MAX  # Memory optimization
+        # Memory optimization
+        - name: MALLOC_ARENA_MAX
           value: "2"
         resources:
           limits:
-            memory: "500Mi"
-            cpu: "800m"
+            memory: "512Mi"                # Adjusted memory limit
+            cpu: "500m"                    # Adjusted CPU limit
           requests:
-            memory: "250Mi"
-            cpu: "400m"
+            memory: "256Mi"                # Adjusted memory request
+            cpu: "250m"                    # Adjusted CPU request
         ports:
         - containerPort: 6379
         volumeMounts:
@@ -93,18 +95,15 @@ spec:
           periodSeconds: 10
           failureThreshold: 30
         readinessProbe:
-          exec:
-            command: ["/bin/sh", "-c", "redis-cli -a $REDIS_PASSWORD ping"]
+          tcpSocket:
+            port: 6379
           initialDelaySeconds: 5
           periodSeconds: 3
         livenessProbe:
-          exec:
-            command: 
-            - /bin/sh
-            - -c
-            - redis-cli -a $REDIS_PASSWORD ping
+          tcpSocket:
+            port: 6379
           initialDelaySeconds: 15
-          periodSeconds: 20
+          periodSeconds: 5
       volumes:
       - name: redis-data
         persistentVolumeClaim:

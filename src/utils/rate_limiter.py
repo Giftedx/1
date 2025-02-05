@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 class RateLimiter:
     """
     A Redis‐backed rate limiter for distributed environments.
+    Uses a sorted set per user and a sliding window with burst support.
     """
     def __init__(self, max_requests: int, window_seconds: int, burst_limit: int = None):
         self.max_requests = max_requests
@@ -24,28 +25,35 @@ class RateLimiter:
         if not self.redis_manager:
             async with self._lock:
                 self.redis_manager = await RedisManager.create()
+                # Log that RedisManager was initialized
+                logger.info("RedisManager initialized for RateLimiter.")
 
     async def is_rate_limited(self, user_id: str) -> bool:
         try:
             return await self._check_rate_limit(user_id)
         except Exception as e:
-            logger.error(f"Rate limiter error: {e}", exc_info=True)
+            logger.error(f"Rate limiter error for user {user_id}: {e}", exc_info=True)
             return False  # Fail open in case of errors
 
     async def _check_rate_limit(self, user_id: str) -> bool:
         await self.initialize()
-        
         key = f"rl:{user_id}"
-        async with self.redis_manager.redis.pipeline() as pipe:
-            now = int(time.time())
-            pipe.multi()
-            pipe.zadd(key, {str(now): now})
-            pipe.zremrangebyscore(key, 0, now - self.window_seconds)
-            pipe.zcard(key)
-            pipe.expire(key, self.window_seconds)
-            _, _, count, _ = await pipe.execute()
-                
-        return count >= self.burst_limit
+        now = int(time.time())
+        try:
+            async with self.redis_manager.redis.pipeline() as pipe:
+                # Queue commands atomically.
+                pipe.multi()
+                pipe.zadd(key, {str(now): now})
+                pipe.zremrangebyscore(key, 0, now - self.window_seconds)
+                pipe.zcard(key)
+                pipe.expire(key, self.window_seconds)
+                _, _, count, _ = await pipe.execute()
+            # Log current rate limit count
+            logger.debug(f"User {user_id} has {count} requests in the window.")
+            return count >= self.burst_limit
+        except Exception as e:
+            logger.error(f"Failed checking rate limit for user {user_id}: {e}", exc_info=True)
+            raise
 
     async def reset_rate_limit(self, user_id: str) -> None:
         await self.initialize()

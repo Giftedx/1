@@ -29,7 +29,10 @@ class Container(containers.DeclarativeContainer):
         video_width=config.provided.VIDEO_WIDTH,
         video_height=config.provided.VIDEO_HEIGHT,
         loglevel=config.provided.FFMPEG_LOGLEVEL,
-        resource_limits=resource_limits
+        resource_limits=providers.Singleton(ResourceLimits,
+                                            max_cpu_percent=80.0,
+                                            max_memory_mb=1024,
+                                            max_processes=config.provided.MAX_CONCURRENT_STREAMS)
     )
     
     queue_manager = providers.Singleton(
@@ -45,3 +48,14 @@ class Container(containers.DeclarativeContainer):
         max_requests=config.provided.RATE_LIMIT_REQUESTS,
         window_seconds=config.provided.RATE_LIMIT_PERIOD
     )
+
+class DIContainer:
+    _services = {}
+
+    @classmethod
+    def register(cls, key: str, service) -> None:
+        cls._services[key] = service
+
+    @classmethod
+    def resolve(cls, key: str):
+        return cls._services.get(key)

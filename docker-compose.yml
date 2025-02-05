@@ -1,0 +1,37 @@
+version: "3.8"
+services:
+  discord-bot:
+    image: media-app:latest
+    container_name: discord_bot
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - PLEX_URL=${PLEX_URL}
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - FFMPEG_LOGLEVEL=warning
+    ports:
+      - "9090:9090"
+    restart: always
+
+  discord-selfbot:
+    image: media-app:latest
+    container_name: discord_selfbot
+    environment:
+      - DISCORD_SELFBOT_TOKEN=${DISCORD_SELFBOT_TOKEN}
+      - FFMPEG_LOGLEVEL=warning
+    restart: always
+
+  app:
+    build: .
+    env_file:
+      - .env.example
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: always

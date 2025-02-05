@@ -37,9 +37,10 @@ class MediaStreamingBot(commands.Bot):
             activity=discord.Activity(type=discord.ActivityType.watching, name="media streams")
         )
         self.config = config
+        # Initialize core services
         self.redis_manager = None
         self.queue_manager = None
-        self.ffmpeg_manager = None
+        self.ffmpeg_manager = FFmpegManager()  # assumes a proper implementation exists
         self.plex_server = None
         self.rate_limiter = RateLimiter(
             config.RATE_LIMIT_REQUESTS,
@@ -47,13 +48,12 @@ class MediaStreamingBot(commands.Bot):
         )
         self.active_streams = None
         self._shutdown_event = asyncio.Event()
-        self._cleanup_tasks: Set[asyncio.Task] = set()
         self.health_check = HealthCheck()
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=config.CIRCUIT_BREAKER_THRESHOLD,
             reset_timeout=config.CIRCUIT_BREAKER_TIMEOUT
         )
-        self.container: Optional[Container] = None
+        self.container = None
         self.service_manager = ServiceManager()
         self.heartbeat = HeartbeatMonitor()
         self._command_latency = Histogram(
@@ -83,26 +83,6 @@ class MediaStreamingBot(commands.Bot):
         self._error_handler = ErrorHandler(
             max_retries=3,
             backoff_factor=1.5
-        )
-        self._command_queue = asyncio.PriorityQueue()
-        self._command_scheduler = CommandScheduler(
-            max_concurrent=50,
-            timeout=30.0
-        )
-        self._rate_limiter = AdaptiveRateLimiter(
-            initial_rate=100,
-            burst_size=20,
-            window_size=60.0,
-            adaptation_factor=0.8
-        )
-        self._command_processor = CommandProcessor(
-            max_concurrent=50,
-            queue_size=1000,
-            priority_levels=3
-        )
-        self._session_manager = SessionManager(
-            cleanup_interval=300,
-            max_idle_time=600
         )
 
     @asynccontextmanager
@@ -137,41 +117,36 @@ class MediaStreamingBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         try:
-            # Initialize dependency container
+            # Initialize dependency container and services
+            self.redis_manager = await provide_redis_manager(self.config)
+            self.plex_server = await provide_plex_server(self.config)
+            self.active_streams = provide_active_streams()
+
             self.container = Container()
             self.container.config.override(self.config)
             self.container.wire(modules=[__name__, "src.cogs.media_commands"])
 
-            # Register services
-            await self.service_manager.register("redis", self.container.redis_manager())
-            await self.service_manager.register("ffmpeg", self.container.ffmpeg_manager(), {"redis"})
+            # Register services with proper dependencies
+            await self.service_manager.register("redis", self.redis_manager)
+            await self.service_manager.register("ffmpeg", self.ffmpeg_manager, {"redis"})
             await self.service_manager.register("queue", self.container.queue_manager(), {"redis"})
             await self.service_manager.register("plex", self.plex_server)
 
-            # Register heartbeats
+            # Register heartbeats and health checks
             self.heartbeat.register("redis", self._check_redis_health)
             self.heartbeat.register("ffmpeg", self._check_ffmpeg_health)
             self.heartbeat.register("plex", self._check_plex_health)
 
-            # Start services
             await self.service_manager.start_services()
             await self.heartbeat.start()
 
-            config = self.config
-            self.plex_server = await provide_plex_server(config)
-            self.active_streams = provide_active_streams()
-            self.active_streams.increment()
             await self.add_cog(MediaCommands(self))
             logger.info("Bot setup complete.")
-            
+
             # Register signal handlers
             for sig in (signal.SIGTERM, signal.SIGINT):
                 self.loop.add_signal_handler(sig, self._handle_signal)
-                
-            # Start monitoring tasks
-            monitor_task = asyncio.create_task(self._monitor())
-            self._register_cleanup_task(monitor_task)
-            
+
             # Register health checks
             self.health_check.register("redis", self._check_redis_health)
             self.health_check.register("ffmpeg", self._check_ffmpeg_health)
@@ -259,55 +234,10 @@ class MediaStreamingBot(commands.Bot):
             self._command_latency.labels(ctx.command.name).observe(duration)
 
     async def process_commands(self, message: discord.Message) -> None:
-        """Enhanced command processing with metrics."""
         if message.author.bot:
             return
-
-        async with self._rate_limiter.check(message.author.id) as allowed:
-            if not allowed:
-                await self._handle_rate_limit(message)
-                return
-
-            ctx = await self.get_context(message)
-            if not ctx.command:
-                return
-
-            try:
-                await self._command_processor.execute(
-                    ctx,
-                    priority=self._get_command_priority(ctx),
-                    timeout=30.0
-                )
-            except CommandProcessingError as e:
-                await self._handle_command_error(ctx, e)
-
-    async def _execute_command_safely(self, ctx: commands.Context) -> None:
-        async with AsyncExitStack() as stack:
-            session = await stack.enter_async_context(self._session_manager.session(ctx))
-            await stack.enter_async_context(self._command_metrics(ctx))
-            await stack.enter_async_context(self._error_boundary(ctx))
-            
-            await self._execute_with_monitoring(ctx, session)
-
-    async def _process_command_queue(self) -> None:
-        while not self._command_queue.empty():
-            _, ctx = await self._command_queue.get()
-            try:
-                async with self._track_command_metrics(ctx):
-                    await ctx.command.invoke(ctx)
-            except Exception as e:
-                await self._error_handler.handle(ctx, e)
-
-    @asynccontextmanager
-    async def _track_command_metrics(self, ctx: commands.Context):
-        """Track command execution metrics."""
-        start_time = time.monotonic()
-        command_name = ctx.command.name
-        try:
-            yield
-        except Exception as e:
-            self._metrics['command_errors'].labels(command=command_name).inc()
-            raise
-        finally:
-            duration = time.monotonic() - start_time
-            self._metrics['command_latency'].labels(command=command_name).observe(duration)
+        if await self.rate_limiter.is_rate_limited(str(message.author.id)):
+            await message.channel.send("You are being rate limited. Please try again later.")
+            return
+        # Directly process the command using the default implementation.
+        await super().process_commands(message)

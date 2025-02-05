@@ -42,6 +42,18 @@ spec:
     - protocol: TCP
       port: 9091
       endPort: 9093
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
 
 ---
 apiVersion: networking.k8s.io/v1

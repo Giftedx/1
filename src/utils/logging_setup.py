@@ -2,13 +2,14 @@ import logging
 import logging.config
 import platform
 import time
+from logging.handlers import RotatingFileHandler
 from functools import wraps
 from typing import Callable, Any
 from pythonjsonlogger import jsonlogger
 
 def setup_logging() -> None:
     """
-    Configures JSON logging with hostname information.
+    Configures JSON logging with hostname and rotates file logs.
     """
     logging_config = {
         'version': 1,
@@ -24,9 +25,16 @@ def setup_logging() -> None:
                 'class': 'logging.StreamHandler',
                 'formatter': 'json',
             },
+            'file': {
+                'class': 'logging.handlers.RotatingFileHandler',
+                'filename': '/var/log/app.log',
+                'maxBytes': 10*1024*1024,  # 10 MB
+                'backupCount': 5,
+                'formatter': 'json',
+            }
         },
         'root': {
-            'handlers': ['console'],
+            'handlers': ['console', 'file'],
             'level': 'INFO',
         },
     }
@@ -62,18 +70,11 @@ def log_performance(logger: logging.Logger) -> Callable:
             try:
                 result = await func(*args, **kwargs)
                 duration = time.perf_counter() - start_time
-                logger.info(f"{func.__name__} completed", extra={
-                    'duration': duration,
-                    'function': func.__name__
-                })
+                logger.info(f"{func.__name__} completed", extra={'duration': duration, 'function': func.__name__})
                 return result
             except Exception as e:
                 duration = time.perf_counter() - start_time
-                logger.error(f"{func.__name__} failed", extra={
-                    'duration': duration,
-                    'function': func.__name__,
-                    'error': str(e)
-                })
+                logger.error(f"{func.__name__} failed", extra={'duration': duration, 'function': func.__name__, 'error': str(e)})
                 raise
         return wrapper
     return decorator

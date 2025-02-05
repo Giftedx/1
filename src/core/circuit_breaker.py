@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import async_timeout
+import time
 from enum import Enum
 from typing import Callable, TypeVar, Optional, Any
 from dataclasses import dataclass
@@ -161,9 +163,10 @@ class CircuitBreaker:
     def _get_adaptive_timeout(self) -> float:
         if len(self._response_times) < 10:
             return self.config.timeout
+        # Using proper adaptive config; note: _adaptive_timeout holds the adaptive config parameters
         p95 = quantiles(self._response_times, n=20)[18]  # 95th percentile
-        return min(max(p95 * 1.5, self._adaptive_config.min_timeout), 
-                  self._adaptive_config.max_timeout)
+        return min(max(p95 * 1.5, self._adaptive_timeout.min_timeout), 
+                   self._adaptive_timeout.max_timeout)
 
     async def _check_state_transition(self) -> None:
         now = datetime.now()

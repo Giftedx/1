@@ -8,9 +8,10 @@ class SecurityValidator:
     
     @classmethod
     def validate_media_path(cls, path: str) -> bool:
-        if not path or len(path) > cls.MAX_PATH_LENGTH:
+        # Reject empty, too long, or path containing directory traversal references.
+        if not path or len(path) > cls.MAX_PATH_LENGTH or ".." in path:
             return False
-        return bool(cls.SAFE_PATH_PATTERN.match(path))
+        return bool(cls.SAFE_PATH_PATTERN.fullmatch(path))
 
     @classmethod
     def sanitize_filename(cls, filename: str) -> str:

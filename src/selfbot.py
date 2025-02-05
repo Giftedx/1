@@ -23,7 +23,7 @@ class StreamingSelfBot(commands.Bot):
         intents = discord.Intents.default()  # Minimal intents for self‑bot functionality.
         super().__init__(command_prefix="!", self_bot=True, intents=intents)
         self.config = config
-        self.redis_manager = None
+        self.redis_manager: Optional[RedisManager] = None
         self.circuit_breaker = CircuitBreaker(
             config.CIRCUIT_BREAKER_THRESHOLD,
             config.CIRCUIT_BREAKER_TIMEOUT
@@ -65,9 +65,8 @@ class StreamingSelfBot(commands.Bot):
 
     async def close(self):
         if not self._shutdown_event.is_set():
-            self._shutdown_event.set()
-            METRICS.increment('bot_shutdowns')
             await self._cleanup()
+            self._shutdown_event.set()
         await super().close()
         logger.info("Self‑bot shutdown complete.")
 
@@ -75,7 +74,8 @@ class StreamingSelfBot(commands.Bot):
         tasks = [t for t in self._cleanup_tasks if not t.done()]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await self.redis_manager.close()
+        if self.redis_manager:
+            await self.redis_manager.close()
         ACTIVE_STREAMS.decrement()
 
     async def on_ready(self):

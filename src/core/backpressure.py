@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from prometheus_client import Counter, Gauge, Histogram, Summary
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 
 T = TypeVar('T')
 
@@ -130,3 +131,21 @@ class LoadTracker:
         if not self._window:
             return 0.0
         return self._total_load / len(self._window)
+
+class BackpressureManager:
+    def __init__(self, max_concurrent: int = 5):
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def acquire(self):
+        await self.semaphore.acquire()
+    
+    def release(self):
+        self.semaphore.release()
+
+@asynccontextmanager
+async def execution_slot(semaphore: asyncio.Semaphore):
+    await semaphore.acquire()
+    try:
+        yield
+    finally:
+        semaphore.release()

@@ -20,16 +20,16 @@ data:
     io-threads-do-reads yes
     dynamic-hz yes
     
-    # Improved persistence
+    # Improved persistence techniques
     aof-use-rdb-preamble yes
     rdb-save-incremental-fsync yes
     
-    # Memory optimization
+    # Memory optimization tuning
     active-defrag-ignore-bytes 100mb
     active-defrag-cycle-min 15
     jemalloc-bg-thread yes
     
-    # Connection tuning
+    # Connection tuning parameters
     tcp-keepalive 45
     tcp-backlog 2048
     maxclients 15000

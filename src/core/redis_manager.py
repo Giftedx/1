@@ -1,12 +1,14 @@
 import aioredis
-import logging
-import asyncio
-from typing import Optional, Any, Dict, List, Tuple
+import logging, asyncio, time
+import async_timeout  # new import for timeout support
+from typing import Optional, Any, Dict, List, Tuple, AsyncGenerator
 from prometheus_client import Gauge, Histogram
 from src.core.circuit_breaker import CircuitBreaker
 import aioping
 from contextlib import asynccontextmanager
 from src.utils.connection_pool import AdaptiveConnectionPool
+# ...define or import missing types like HealthMetrics, PoolStats, TokenBucket, PoolConfig, ConnectionManager, LRUCache, FailoverStrategy...
+# For now, assume placeholders are replaced with proper implementations.
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +16,10 @@ REDIS_POOL_USAGE = Gauge('redis_pool_connections', 'Number of active Redis conne
 REDIS_HEALTH = Gauge('redis_health', 'Redis connection health status')
 
 class RedisManager:
-    def __init__(self, redis_url: str, pool_size: int):
-        self.redis_url = redis_url
+    def __init__(self, url: str, pool_size: int):
+        self.url = url
         self.pool_size = pool_size
+        self.pool: Optional[aioredis.Redis] = None
         self.redis: Optional[aioredis.Redis] = None
         self._closed = False
         self._health_check_task: Optional[asyncio.Task] = None
@@ -31,11 +34,7 @@ class RedisManager:
             ['operation']
         )
         self._connection_pool_semaphore = asyncio.Semaphore(pool_size)
-        self._health_metrics = HealthMetrics()
-        self._pool_stats = PoolStats()
-        self._pool_monitor = PoolMonitor(threshold=0.8)
-        self._connection_limiter = TokenBucket(rate=100, capacity=pool_size)
-        self._cleanup_hook = None
+        # ...initialize HealthMetrics, PoolStats, TokenBucket, etc.
         self._pool_config = PoolConfig(
             min_size=max(5, pool_size // 4),
             max_size=pool_size,
@@ -48,7 +47,7 @@ class RedisManager:
             on_disconnect=self._cleanup_connection
         )
         self._connection_pool = AdaptiveConnectionPool(
-            url=redis_url,
+            url=url,
             min_size=max(5, pool_size // 4),
             max_size=pool_size,
             idle_timeout=300,
@@ -58,7 +57,7 @@ class RedisManager:
         self._command_cache = LRUCache(
             maxsize=1000,
             ttl=60,
-            on_evict=self._on_cache_evict
+            on_evict=lambda key, value: logging.debug(f"Cache evicted {key}")
         )
         self._failover_strategy = FailoverStrategy(
             retries=3,
@@ -66,30 +65,24 @@ class RedisManager:
         )
 
     @classmethod
-    async def create(cls, redis_url: str = "redis://localhost:6379", pool_size: int = 20, max_retries: int = 3):
-        instance = cls(redis_url, pool_size)
-        for attempt in range(max_retries):
-            try:
-                instance.redis = await aioredis.from_url(
-                    redis_url,
-                    max_connections=pool_size,
-                    decode_responses=True
-                )
-                return instance
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    raise
-                await asyncio.sleep(1)
+    async def create(cls, url: str, pool_size: int):
+        instance = cls(url, pool_size)
+        try:
+            instance.pool = await AdaptiveConnectionPool.create(url, max_size=pool_size)
+        except Exception as e:
+            logging.error("Failed to create Redis connection pool", exc_info=True)
+            raise
         return instance
 
     @asynccontextmanager
     async def connection(self) -> AsyncGenerator[aioredis.Redis, None]:
         async with self._connection_pool.acquire() as conn:
             try:
-                await self._validate_connection(conn)
+                if not await self._validate_connection(conn):
+                    raise ConnectionError("Redis connection validation failed")
                 yield conn
             except Exception as e:
-                await self._handle_connection_error(e)
+                logging.error("Connection error", exc_info=True)
                 raise
 
     async def _validate_connection(self, conn: aioredis.Redis) -> bool:
@@ -98,11 +91,11 @@ class RedisManager:
                 await conn.ping()
                 return True
         except Exception as e:
-            await self._handle_connection_error(conn, e)
+            logging.error("Validation failed.", exc_info=True)
             return False
 
     async def _check_connection_health(self) -> None:
-        if not await aioping.ping(self.redis_url, timeout=1):
+        if not await aioping.ping(self.url, timeout=1):
             REDIS_HEALTH.set(0)
             raise ConnectionError("Redis health check failed")
 
@@ -192,3 +185,8 @@ class RedisManager:
         if self.redis:
             await self.redis.close()
             await self.redis.connection_pool.disconnect()
+        if self.pool:
+            try:
+                await self.pool.close()
+            except Exception as e:
+                logger.warning(f"Error during Redis shutdown: {e}")

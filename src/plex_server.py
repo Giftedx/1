@@ -1,11 +1,10 @@
 import asyncio
 import logging
+import aiohttp
 from plexapi.server import PlexServer as PlexServerSync
 from src.utils.config import Config
 from src.core.exceptions import MediaNotFoundError
-from src.metrics import ACTIVE_STREAMS
 from src.core.caching import cached
-from src.monitoring.metrics import track_latency
 from tenacity import retry, stop_after_attempt, wait_exponential
 from prometheus_client import Counter, Histogram
 from functools import lru_cache
@@ -24,34 +23,41 @@ class PlexServer:
         return cls._instance
 
     def __init__(self, plex_url: str, token: str):
-        self.plex_url = plex_url
+        self.plex_url = plex_url.rstrip("/")
         self.token = token
-        self.server = PlexServerSync(plex_url, token)
+        try:
+            self.server = PlexServerSync(self.plex_url, self.token)
+        except Exception as e:
+            logger.error(f"Plex initialization error: {e}", exc_info=True)
+            raise
         self._metrics = {
             'search_latency': Histogram('plex_search_latency_seconds', 
                                       'Time taken for Plex searches'),
             'errors': Counter('plex_errors_total', 'Number of Plex errors',
                             ['type'])
         }
-        self._connection_pool = AsyncConnectionPool(max_size=10)
+        self._connection_pool = None  # Replace with your async pool if needed.
         self._request_semaphore = asyncio.Semaphore(5)
-        self._media_cache = TTLCache(maxsize=1000, ttl=300)
+        self._media_cache = {}  # Replace with a TTLCache implementation.
 
     @asynccontextmanager
     async def _plex_session(self):
         async with self._request_semaphore:
-            try:
-                conn = await self._connection_pool.acquire()
-                yield conn
-            finally:
-                await self._connection_pool.release(conn)
+            # ...acquire async connection
+            yield
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    async def ping(self) -> None:
+    async def ping(self) -> bool:
         """
         Ping the Plex server with retries.
         """
-        await asyncio.to_thread(self.server.system)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.plex_url}/", headers={"X-Plex-Token": self.token}) as resp:
+                    return resp.status == 200
+        except Exception:
+            logger.exception("Plex ping failed")
+            return False
 
     def get_media(self, media_path: str):
         # Plex media retrieval logic
@@ -64,20 +70,23 @@ class PlexServer:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     @lru_cache(maxsize=100)
     async def get_media_info(self, media_path: str):
-        async with self._plex_session() as session:
-            try:
-                with self._metrics['search_latency'].time():
-                    return await self._fetch_media_with_retry(session, media_path)
-            except Exception as e:
-                self._handle_media_error(e, media_path)
-                raise
+        try:
+            with self._metrics['search_latency'].time():
+                return await asyncio.to_thread(self.server.library.search, media_path)
+        except Exception as e:
+            logger.error(f"Error fetching media info for {media_path}: {e}", exc_info=True)
+            raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    @cached(ttl=60)
-    @track_latency("plex_search")
     async def search_media(self, query: str):
-        """Search for media with caching and retries."""
-        return await asyncio.to_thread(self.server.library.search, query)
+        logger.info(f"Searching Plex for media: {query}")
+        media = await asyncio.to_thread(self.server.library.search, query)
+        if not media:
+            raise MediaNotFoundError(f"Media not found for query: {query}")
+        item = media[0]
+        return {"title": item.title, "media_path": item.media[0].file, "quality": "medium"}
+
+    async def search_and_validate(self, query: str) -> dict:
+        return await self.search_media(query)
 
     def get_active_streams_count(self) -> int:
-        return ACTIVE_STREAMS.get_current_value()
+        return 0

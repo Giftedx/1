@@ -1,76 +1,54 @@
-# Media Application
+# Media Bot Production‑Grade System
 
-This application handles media streaming and processing via FFmpeg, Redis, and Plex. It features:
+## Overview
+This project provides:
+- A Discord Bot for command processing and Plex integration.
+- A Discord Self‑bot for handling video media playback in voice channels.
+- A production‑grade architecture with robust error handling, scalability, and an elegant UI dashboard.
 
-- **FFmpeg process management** with asynchronous error handling.
-- **Enhanced circuit breaker** implementation for resilient operation.
-- **Redis‑backed distributed rate limiting**.
-- **Queue management** for media tasks.
-- A **Discord bot** that listens for commands and adds media to the processing queue.
-- A separate **self‑bot** for streaming via Plex.
-- A **health check endpoint** for container orchestration.
-- **Monitoring alerts and Prometheus metrics**.
-- A **CI/CD pipeline** via GitHub Actions.
-- Secure secret management with Vault (or environment variables).
+## Setup
 
-## Setup Instructions
+1. **Environment Variables**  
+   Create a copy of `.env.example` to `.env` and update the following:
+   - `BOT_TOKEN` or `STREAMING_BOT_TOKEN`
+   - `PLEX_URL` and `PLEX_TOKEN`
+   - `REDIS_URL`
+   - `SERVICE_MODE` (set to either `bot` or `selfbot`)
+   - `VOICE_CHANNEL_ID` (for selfbot)
 
-1. **Clone the repository:**
-
+2. **Dependencies**  
+   Install Python dependencies:
    ```bash
-   git clone https://your-repo-url/media-bot.git
-   cd media-bot
+   pip install -r requirements.txt
    ```
 
-2. **Configure environment variables:**
-
-   Copy the example file and edit as required:
-
+3. **Testing**
+   Run tests with:
    ```bash
-   cp .env.example .env
+   pytest --maxfail=1 --disable-warnings -q
    ```
 
-3. **Install dependencies:**
+## Containerization
 
-   ```bash
-   pip install --no-cache-dir -r requirements.txt
-   ```
-
-4. **Build and run with Docker:**
-
+1. **Docker Build**
    ```bash
    docker build -t media-app .
-   docker run -p 9090:9090 media-app
    ```
 
-5. **Access the health endpoint:**
+2. **Docker Compose**
+   ```bash
+   docker-compose up
+   ```
 
-   Open [http://localhost:9090/health](http://localhost:9090/health)
+## UI Dashboard
 
-## Testing
+- The UI is served from `/ui/index.html` and can be extended as needed.
 
-Run tests with:
+## Deployment
 
-```bash
-pytest
-```
+For production deployment, consider using Kubernetes with this Docker image. Configure resource requests/limits and secret management based on your environment.
 
-## CI/CD Pipeline
+## Security
 
-This repository utilises GitHub Actions. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for details.
-
-## Kubernetes Deployment
-
-Deployment manifests are provided in the `deploy/k8s/` directory.
-
-## Monitoring
-
-Prometheus alert rules are located in the `deploy/monitoring/prometheus-alerts.yml` file.
-
-## Logging
-
-Logging is configured to use JSON format with hostname information for structured logs.
-
-## Licence
-
-This project is released under the MIT Licence.
+- Ensure that production tokens and secrets are managed securely (e.g., using Vault or Kubernetes Secrets).
+- Regularly run the provided CI/CD pipeline for security audits.
