@@ -13,6 +13,23 @@ MEMORY_USAGE = Gauge('memory_usage_bytes', 'Memory usage in bytes')
 CPU_USAGE = Gauge('cpu_usage_percent', 'CPU usage percentage')
 ACTIVE_CONNECTIONS = Gauge('active_connections', 'Number of active connections')
 
+class MetricsCollector:
+    def __init__(self):
+        self.stream_latency = Histogram(
+            'stream_latency_seconds',
+            'Streaming latency in seconds',
+            ['stream_type']
+        )
+        self.active_streams = Gauge(
+            'active_streams',
+            'Number of active streams'
+        )
+        self.stream_errors = Counter(
+            'stream_errors_total',
+            'Number of streaming errors',
+            ['error_type']
+        )
+
 def track_latency(endpoint: str):
     def decorator(func):
         @functools.wraps(func)

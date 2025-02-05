@@ -1,9 +1,7 @@
-import requests
-import logging
 import aiohttp
+import logging
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
-import asyncio
 
 logger = logging.getLogger(__name__)
 

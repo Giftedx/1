@@ -163,6 +163,23 @@ class Metrics:
         """Cleanup metric resources."""
         await self._exit_stack.aclose()
 
+class MetricsCollector:
+    def __init__(self):
+        self.stream_latency = Histogram(
+            'stream_latency_seconds',
+            'Streaming latency in seconds',
+            ['stream_type']
+        )
+        self.active_streams = Gauge(
+            'active_streams',
+            'Number of active streams'
+        )
+        self.stream_errors = Counter(
+            'stream_errors_total',
+            'Number of streaming errors',
+            ['error_type']
+        )
+
 # Global metrics instance
 METRICS = Metrics()
 

@@ -90,3 +90,24 @@ class MediaBot(commands.Bot):
                 await self.close()
 
         asyncio.run(runner())
+
+@bot.command(name="play")
+async def play_media(ctx, *, media: str):
+    # Example usage of Plex:
+    plex_url = os.getenv("PLEX_URL")
+    plex_token = os.getenv("PLEX_TOKEN")
+    if not plex_url or not plex_token:
+        await ctx.send("Plex server not configured.")
+        return
+
+    plex_client = PlexServer(plex_url, plex_token)
+    # Retrieve the media file/URL...
+    try:
+        # ...
+        await ctx.send(f"Playing {media} now...")
+        # Connect to voice / stream via FFmpeg or hand off to another system
+    except MediaNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"Playback error: {e}", exc_info=True)
+        raise StreamingError(str(e))

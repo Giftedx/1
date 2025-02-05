@@ -25,7 +25,6 @@ class RateLimiter:
         if not self.redis_manager:
             async with self._lock:
                 self.redis_manager = await RedisManager.create()
-                # Log that RedisManager was initialized
                 logger.info("RedisManager initialized for RateLimiter.")
 
     async def is_rate_limited(self, user_id: str) -> bool:
@@ -41,14 +40,11 @@ class RateLimiter:
         now = int(time.time())
         try:
             async with self.redis_manager.redis.pipeline() as pipe:
-                # Queue commands atomically.
-                pipe.multi()
-                pipe.zadd(key, {str(now): now})
+                pipe.zadd(key, mapping={str(now): now})
                 pipe.zremrangebyscore(key, 0, now - self.window_seconds)
                 pipe.zcard(key)
                 pipe.expire(key, self.window_seconds)
                 _, _, count, _ = await pipe.execute()
-            # Log current rate limit count
             logger.debug(f"User {user_id} has {count} requests in the window.")
             return count >= self.burst_limit
         except Exception as e:

@@ -1,10 +1,13 @@
-import asyncio, os, time, signal, logging, psutil
+import asyncio, os, time, signal, logging, psutil, platform, subprocess
 from typing import Dict, Optional, List, AsyncGenerator
-from contextlib import asynccontextmanager, suppress
-from cachetools import TTLCache  # Ensure this dependency is installed
+from contextlib import asynccontextmanager
+from cachetools import TTLCache
 from prometheus_client import Gauge, Summary
 from dataclasses import dataclass
 from src.metrics import FFMPEG_ERRORS, STREAM_QUALITY
+from src.utils.config import settings
+from src.core.exceptions import StreamingError
+from src.monitoring.metrics import FFMPEG_LATENCY, TRANSCODE_DURATION
 
 logger = logging.getLogger(__name__)
 
@@ -14,18 +17,26 @@ FFMPEG_MEMORY_USAGE = Gauge('ffmpeg_memory_usage_bytes', 'FFmpeg memory usage in
 
 @dataclass
 class FFmpegConfig:
-    hwaccel: str = "auto"
     thread_queue_size: int = 512
+    hwaccel: str = "auto"
     preset: str = "veryfast"
     width: int = 1280
     height: int = 720
-
-class StreamingError(Exception):
-    pass
+    audio_bitrate: str = "192k"
+    video_bitrate: str = "3000k"
+    threads: int = 4
 
 class FFmpegManager:
-    def __init__(self, config: FFmpegConfig):
-        self.config = config
+    def __init__(self):
+        self.ffmpeg_path = self._find_ffmpeg()
+        self.config = FFmpegConfig(
+            thread_queue_size=settings.FFMPEG_THREAD_QUEUE_SIZE,
+            hwaccel=settings.FFMPEG_HWACCEL,
+            preset=settings.FFMPEG_PRESET,
+            width=settings.VIDEO_WIDTH,
+            height=settings.VIDEO_HEIGHT
+        )
+        self._verify_ffmpeg()
         self._active_processes: Dict[str, asyncio.subprocess.Process] = {}
         self.resource_limits = {"max_cpu_percent": 80.0, "max_memory_mb": 1024, "max_processes": 5}
         self._job_queue = asyncio.PriorityQueue()
@@ -41,6 +52,138 @@ class FFmpegManager:
         self._adaptive_quality = True
         self._quality_monitor = asyncio.create_task(self._monitor_stream_quality())
         self._stream_stats = TTLCache(maxsize=100, ttl=300)
+
+    def _find_ffmpeg(self) -> str:
+        """Locate FFmpeg binary with fallback options."""
+        paths = [
+            "ffmpeg",
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "C:\\ffmpeg\\bin\\ffmpeg.exe" if platform.system() == "Windows" else None
+        ]
+        
+        for path in filter(None, paths):
+            try:
+                subprocess.run([path, "-version"], capture_output=True, check=True)
+                return path
+            except (subprocess.SubProcessError, FileNotFoundError):
+                continue
+                
+        raise StreamingError("FFmpeg not found. Please install FFmpeg.")
+
+    def _verify_ffmpeg(self) -> None:
+        """Verify FFmpeg installation and capabilities."""
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-version"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"FFmpeg version: {result.stdout.splitlines()[0]}")
+            
+            # Check hardware acceleration support
+            if self.config.hwaccel != "none":
+                self._check_hwaccel()
+                
+        except subprocess.SubProcessError as e:
+            raise StreamingError(f"FFmpeg verification failed: {str(e)}")
+
+    def _check_hwaccel(self) -> None:
+        """Check hardware acceleration support."""
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-hwaccels"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            available_hwaccels = result.stdout.strip().split('\n')[1:]
+            logger.info(f"Available hardware accelerators: {', '.join(available_hwaccels)}")
+            
+            if self.config.hwaccel != "auto" and self.config.hwaccel not in available_hwaccels:
+                logger.warning(
+                    f"Requested hardware accelerator {self.config.hwaccel} not available. "
+                    "Falling back to software encoding."
+                )
+                self.config.hwaccel = "none"
+                
+        except subprocess.SubProcessError:
+            logger.warning("Failed to check hardware acceleration. Using software encoding.")
+            self.config.hwaccel = "none"
+
+    @FFMPEG_LATENCY.time()
+    def get_stream_options(self, width: Optional[int] = None, 
+                         height: Optional[int] = None,
+                         preset: Optional[str] = None,
+                         hwaccel: Optional[str] = None) -> Dict[str, str]:
+        """Generate FFmpeg streaming options."""
+        width = width or self.config.width
+        height = height or self.config.height
+        preset = preset or self.config.preset
+        hwaccel = hwaccel or self.config.hwaccel
+
+        before_options = [
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+            "-nostdin"
+        ]
+
+        if hwaccel != "none":
+            before_options.extend(["-hwaccel", hwaccel])
+
+        options = [
+            "-vf", f"scale={width}:{height}",
+            "-c:v", "libx264",
+            "-preset", preset,
+            "-b:v", self.config.video_bitrate,
+            "-maxrate", self.config.video_bitrate,
+            "-bufsize", str(int(self.config.video_bitrate[:-1]) * 2) + "k",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", self.config.audio_bitrate,
+            "-ar", "48000",
+            "-ac", "2",
+            "-f", "opus",
+            "-thread_queue_size", str(self.config.thread_queue_size),
+            "-threads", str(self.config.threads)
+        ]
+
+        return {
+            "before_options": " ".join(before_options),
+            "options": " ".join(options)
+        }
+
+    @TRANSCODE_DURATION.time()
+    def transcode_media(self, input_path: str, output_path: str, 
+                       options: Optional[Dict[str, str]] = None) -> None:
+        """Transcode media using FFmpeg with proper error handling."""
+        options = options or self.get_stream_options()
+        cmd = [
+            self.ffmpeg_path,
+            *options["before_options"].split(),
+            "-i", input_path,
+            *options["options"].split(),
+            output_path
+        ]
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            stdout, stderr = process.communicate()
+
+            if process.returncode != 0:
+                raise StreamingError(f"FFmpeg transcode failed: {stderr}")
+
+            logger.info(f"Successfully transcoded {input_path} to {output_path}")
+            
+        except Exception as e:
+            raise StreamingError(f"Transcode failed: {str(e)}")
 
     async def _collect_process_stats(self) -> Dict:
         stats = {'cpu_total': 0.0, 'memory_total': 0, 'process_count': len(self._active_processes)}
@@ -59,7 +202,6 @@ class FFmpegManager:
         while not self._shutdown_event.is_set():
             try:
                 stats = await self._collect_process_stats()
-                # Adaptive limit logic
                 if stats['cpu_total'] > self.resource_limits["max_cpu_percent"]:
                     logger.info("High CPU usage; adjusting limits.")
                     self._backoff_factor *= 1.1
@@ -79,7 +221,7 @@ class FFmpegManager:
             raise StreamingError("Rate limiting active due to recent errors")
         
         try:
-            async with self._semaphore:
+            async with self._process_semaphore:
                 command = self._build_optimized_command(media_path, quality)
                 process = await self._start_process_with_limits(command)
                 yield process
@@ -100,7 +242,6 @@ class FFmpegManager:
             logger.error(f"Error in streaming session for {media_path}: {e}", exc_info=True)
             raise
         finally:
-            # ...cleanup logic...
             pass
 
     async def _handle_job(self, job) -> None:
@@ -146,7 +287,7 @@ class FFmpegManager:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
             limit=32768,
-            preexec_fn=lambda: None,  # Replace with real limits if needed.
+            preexec_fn=lambda: None,
             env=env
         )
 
@@ -158,7 +299,6 @@ class FFmpegManager:
         }
 
     def _build_optimized_command(self, media_path: str, quality: str) -> list:
-        # Enhanced FFmpeg command with better quality and performance
         bitrate = self._get_adaptive_bitrate(quality)
         return [
             'ffmpeg',
@@ -205,7 +345,7 @@ class FFmpegManager:
             )
             
             self._active_processes[url] = process
-            STREAM_QUALITY.set(bitrate / 1000)  # Convert to kbps
+            STREAM_QUALITY.set(bitrate / 1000)
             return process
             
         except Exception as e:

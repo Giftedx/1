@@ -1,55 +1,25 @@
-version: '3.8'
+version: '3.9'
 services:
-  discord-media-bot:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "80:9090"
+  bot:
+    build: .
+    container_name: media_bot
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - REDIS_POOL_SIZE=50
-      - OTEL_BATCH_SPAN_PROCESSOR_EXPORT_TIMEOUT=30000
-      - LOG_LEVEL=info
-      - NODE_ENV=production
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-      restart_policy:
-        condition: on-failure
-    networks:
-      app-network:
-        ipv4_address: 172.28.0.2
-    restart: unless-stopped
+      - BOT_TOKEN=${BOT_TOKEN}
+      - PLEX_URL=${PLEX_URL}
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - COMMAND_PREFIX=${COMMAND_PREFIX}
+      - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
 
   redis:
-    image: redis:7.0-alpine
-    command: redis-server /usr/local/etc/redis/redis.conf
-    volumes:
-      - redis-data:/data
-      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-    environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-    ulimits:
-      nproc: 65535
-      nofile:
-        soft: 65535
-        hard: 65535
-    sysctls:
-      net.core.somaxconn: 1024
-    security_opt:
-      - no-new-privileges:true
-    networks:
-      app-network:
-        ipv4_address: 172.28.0.3
-    restart: unless-stopped
+    image: redis:7
+    container_name: media_redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
 
 volumes:
   redis-data:

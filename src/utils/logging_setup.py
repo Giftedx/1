@@ -11,35 +11,18 @@ def setup_logging() -> None:
     """
     Configures JSON logging with hostname and rotates file logs.
     """
-    logging_config = {
-        'version': 1,
-        'disable_existing_loggers': False,
-        'formatters': {
-            'json': {
-                '()': jsonlogger.JsonFormatter,
-                'fmt': '%(asctime)s %(hostname)s %(name)s %(levelname)s %(message)s',
-            }
-        },
-        'handlers': {
-            'console': {
-                'class': 'logging.StreamHandler',
-                'formatter': 'json',
-            },
-            'file': {
-                'class': 'logging.handlers.RotatingFileHandler',
-                'filename': '/var/log/app.log',
-                'maxBytes': 10*1024*1024,  # 10 MB
-                'backupCount': 5,
-                'formatter': 'json',
-            }
-        },
-        'root': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-        },
-    }
-
-    logging.config.dictConfig(logging_config)
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO,
+        handlers=[
+            logging.StreamHandler(),
+            logging.handlers.RotatingFileHandler(
+                'bot.log',
+                maxBytes=10_000_000,
+                backupCount=5
+            )
+        ]
+    )
 
     class HostnameFilter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:

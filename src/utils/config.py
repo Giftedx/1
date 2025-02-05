@@ -14,103 +14,72 @@ class Environment(str, Enum):
     PROD = "production"
     PRODUCTION = "production"
 
+class ServiceMode(str, Enum):
+    BOT = "bot"
+    SELFBOT = "selfbot"
+    COMBINED = "combined"
+
+class FFmpegPreset(str, Enum):
+    ULTRAFAST = "ultrafast"
+    SUPERFAST = "superfast"
+    VERYFAST = "veryfast"
+    FASTER = "faster"
+    FAST = "fast"
+    MEDIUM = "medium"
+
 class Settings(BaseSettings):
+    # Service Configuration
+    SERVICE_MODE: ServiceMode = ServiceMode.BOT
+    LOG_LEVEL: str = "INFO"
+    
     # Bot Configuration
     BOT_TOKEN: str
-    STREAMING_BOT_TOKEN: str
+    STREAMING_BOT_TOKEN: Optional[str] = None
+    VOICE_CHANNEL_ID: Optional[str] = None
+    COMMAND_PREFIX: str = "!"
     
-    # Service URLs
-    PLEX_URL: AnyUrl  # validated URL
+    # Media Configuration
+    PLEX_URL: AnyUrl
     PLEX_TOKEN: str
+    VIDEO_WIDTH: int = 1280
+    VIDEO_HEIGHT: int = 720
+    
+    # FFmpeg Settings
+    FFMPEG_THREAD_QUEUE_SIZE: int = 512
+    FFMPEG_HWACCEL: str = "auto"
+    FFMPEG_PRESET: FFmpegPreset = FFmpegPreset.VERYFAST
+    
+    # Redis Configuration
     REDIS_URL: str
-    
-    # Optional Vault Configuration
-    VAULT_ADDR: Optional[AnyUrl] = None
-    VAULT_TOKEN: Optional[str] = None
-    
-    # Performance Settings
     REDIS_POOL_MIN_SIZE: int = 5
     REDIS_POOL_MAX_SIZE: int = 20
     REDIS_POOL_TIMEOUT: int = 30
-    REDIS_POOL_SIZE: int = 30  # added for Redis connection pool setting
-    WORKER_PROCESSES: int = 2
     
-    # Monitoring
+    # Performance Settings
+    WORKER_PROCESSES: int = 2
+    MAX_CONCURRENT_STREAMS: int = 100
+    CIRCUIT_BREAKER_THRESHOLD: int = 5
+    CIRCUIT_BREAKER_RESET_TIME: int = 30
+    
+    # Monitoring Configuration
+    ENABLE_METRICS: bool = True
     METRICS_PORT: int = 9090
     OTEL_TRACE_SAMPLING_RATE: float = 0.1
-    
-    # Service timeouts
-    SERVICE_TIMEOUTS: Dict[str, float] = Field(
-        default_factory=lambda: {
-            'redis': 5.0,
-            'discord': 10.0,
-            'plex': 15.0
-        }
-    )
-    
-    # Retry configuration
-    MAX_RETRIES: int = Field(default=3, ge=1, le=10)
-    RETRY_BACKOFF_MIN: float = Field(default=1.0, ge=0.1)
-    RETRY_BACKOFF_MAX: float = Field(default=30.0, ge=1.0)
-    
-    # Health check configuration
-    HEALTH_CHECK_INTERVAL: int = Field(default=30, ge=10)
-    HEALTH_CHECK_TIMEOUT: float = Field(default=5.0, ge=1.0)
-    
-    # Circuit breaker configuration
-    CIRCUIT_BREAKER_THRESHOLD: int = Field(default=5, ge=1)
-    CIRCUIT_BREAKER_RESET_TIME: int = Field(default=30, ge=5)
 
-    # Additional Settings
-    MAX_QUEUE_LENGTH: int = 100
-    VIRTUAL_CAM_DEVICE: str = "/dev/video0"
-    VIDEO_WIDTH: int = 1280
-    VIDEO_HEIGHT: int = 720
-    FFMPEG_LOGLEVEL: str = "error"
-    RATE_LIMIT_REQUESTS: int = 5
-    RATE_LIMIT_PERIOD: int = 60
-    DEFAULT_QUALITY: QualityPreset = QualityPreset.MEDIUM
-    CIRCUIT_BREAKER_TIMEOUT: int = 60
-    ENV: Environment = Environment.DEVELOPMENT
-
-    # New field for active stream limit
-    MAX_CONCURRENT_STREAMS: int = 100
-
-    @validator('SERVICE_TIMEOUTS')
-    def validate_timeouts(cls, v):
-        for service, timeout in v.items():
-            if timeout <= 0:
-                raise ValueError(f"Timeout for {service} must be positive")
+    @validator('FFMPEG_PRESET')
+    def validate_ffmpeg_preset(cls, v):
+        if v not in FFmpegPreset.__members__.values():
+            raise ValueError(f"Invalid FFmpeg preset. Choose from: {list(FFmpegPreset.__members__.keys())}")
         return v
 
-    # New computed property to get a default alert service instance
-    @property
-    def alert_service(self):
-        from src.monitoring.alerts import AlertService  # Import here to avoid circular dependencies
-        # Using BOT_TOKEN as a placeholder for auth_token and a default URL and environment
-        alert_config = {
-            "alert_url": "https://alert.example.com",
-            "auth_token": self.BOT_TOKEN,
-            "environment": "production"
-        }
-        return AlertService(alert_config)
+    @validator('SERVICE_MODE')
+    def validate_service_mode(cls, v, values):
+        if v == ServiceMode.SELFBOT and not values.get('STREAMING_BOT_TOKEN'):
+            raise ValueError("STREAMING_BOT_TOKEN required for selfbot mode")
+        return v
 
     class Config:
         env_file = ".env"
         case_sensitive = True
-
-settings = Settings()
-
-class Settings:
-    BOT_TOKEN = os.getenv('BOT_TOKEN')
-    PLEX_URL = os.getenv('PLEX_URL')
-    PLEX_TOKEN = os.getenv('PLEX_TOKEN')
-    COMMAND_PREFIX = os.getenv('COMMAND_PREFIX', '!')
-    FFMPEG_PRESET = os.getenv('FFMPEG_PRESET', 'veryfast')
-    MEDIA_WORKER_THREADS = int(os.getenv('MEDIA_WORKER_THREADS', '4'))
-    VIDEO_WIDTH = int(os.getenv('VIDEO_WIDTH', '1280'))
-    VIDEO_HEIGHT = int(os.getenv('VIDEO_HEIGHT', '720'))
-    FFMPEG_THREADS = int(os.getenv('FFMPEG_THREADS', '2'))
-    FFMPEG_HWACCEL = os.getenv('FFMPEG_HWACCEL', 'auto')
 
 settings = Settings()

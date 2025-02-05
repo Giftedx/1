@@ -1,16 +1,21 @@
-version: '3.8'
+version: '3.9'
 services:
   discord-media-bot:
-    container_name: discord-media-bot
+    container_name: media_bot
     build:
       context: ..
       dockerfile: Dockerfile
     ports:
-      - "9090:9090"
+      - "8080:8080"
     depends_on:
       redis:
         condition: service_healthy
     environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - PLEX_URL=${PLEX_URL}
+      - PLEX_TOKEN=${PLEX_TOKEN}
+      - COMMAND_PREFIX=${COMMAND_PREFIX}
+      - VOICE_CHANNEL_ID=${VOICE_CHANNEL_ID}
       - REDIS_URL=redis://redis:6379
       - NODE_ENV=production
       - VAULT_ADDR=${VAULT_ADDR}
@@ -46,9 +51,11 @@ services:
     tmpfs:
       - /tmp:size=256M
   redis:
-    container_name: redis
-    image: redis:7.0-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD} --maxclients 10000 --maxmemory 1gb --maxmemory-policy allkeys-lru
+    container_name: media_redis
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:

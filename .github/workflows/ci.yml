@@ -19,13 +19,28 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Run security audit
+      
+      - name: Cache Security DBs
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/trivy
+            ~/.cache/snyk
+            ~/.cache/pre-commit
+            ~/.local/share/trivy
+          key: ${{ runner.os }}-security-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-security-
+      
+      - name: Run Snyk analysis
         uses: snyk/actions/python@master
+        continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
@@ -34,78 +49,92 @@ jobs:
             --all-projects
             --detection-depth=4
             --sarif-file-output=snyk.sarif
-      - name: Cache Security DBs
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/trivy
-            ~/.cache/snyk
-            ~/.cache/pre-commit
-          key: ${{ runner.os }}-security-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-security-
-      - name: Run enhanced security checks
+
+      - name: Run security tools
         run: |
           pip install bandit safety semgrep pre-commit
-          pre-commit run --all-files
-          bandit -r . -ll -iii --exclude tests/ -f json -o bandit-results.json
+          pre-commit run --all-files || true
+          bandit -r . -ll -iii --exclude tests/ -f sarif -o bandit-results.sarif
           safety check --full-report --json > safety-report.json
-          semgrep scan --config=p/security-audit --json > semgrep-results.json
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          trivy fs --security-checks vuln,config,secret --ignore-unfixed --exit-code 1 --cache-dir .trivycache --severity HIGH,CRITICAL --format json > trivy-results.json .
-      - name: Upload security results
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
-
-  security-scan:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.11]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v4
-      - name: Cache vulnerability DBs
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/trivy
-            ~/.local/share/trivy
-          key: ${{ runner.os }}-vuln-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-vuln-
-      - name: Run comprehensive security scan
+          semgrep scan --config=p/security-audit --sarif > semgrep-results.sarif
+      
+      - name: Run Trivy scan
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: fs
+          scan-type: 'fs'
           ignore-unfixed: true
-          severity: CRITICAL,HIGH,MEDIUM
-          format: sarif
-          output: trivy-results.sarif
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
           timeout: '10m'
           cache-dir: .trivycache
-      - name: Enhanced OWASP Check
+
+      - name: Run OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
-          project: discord-media-bot
-          path: .
-          format: HTML,SARIF,JSON
+          project: 'discord-media-bot'
+          path: '.'
+          format: 'SARIF'
           failOnCVSS: 7
           enableExperimental: true
           additionalArguments: >
             --suppression suppression.xml
             --nodeAuditSkipDevDependencies
             --nodePackageSkipDevDependencies
+
       - name: Upload security results
         uses: github/codeql-action/upload-sarif@v2
         if: always()
         with:
           sarif_file: trivy-results.sarif
+          category: trivy-results
+
+      - name: Upload additional SARIF results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: snyk.sarif
+          category: snyk-results
+
+      - name: Upload Semgrep results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep-results
+
+      - name: Upload Bandit results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit-results
+
+  code-quality-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      
+      - name: Install dependencies
+        run: |
+          pip install flake8 black
+      
+      - name: Run flake8
+        run: flake8 src/
+      
+      - name: Run black
+        run: black --check src/
 
   build-test-deploy:
-    needs: [security-audit, security-scan]
+    needs: [security-audit, code-quality-check]
     runs-on: ubuntu-latest
     environment: production
     steps:

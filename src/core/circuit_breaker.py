@@ -78,146 +78,41 @@ class AdaptiveConfig:
     success_threshold: float = 0.9
 
 class CircuitBreaker:
-    def __init__(self, name: str, config: Optional[CircuitConfig] = None):
-        self.name = name
-        self.config = config or CircuitConfig()
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time: Optional[datetime] = None
-        self._half_open_calls = 0
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self._failure_count = 0
+        self._last_failure_time = 0
+        self._state = CircuitState.CLOSED
         self._lock = asyncio.Lock()
-        self._metrics = {
-            'state': Gauge(f'circuit_breaker_{name}_state', 'Circuit breaker state'),
-            'failures': Counter(f'circuit_breaker_{name}_failures', 'Number of failures'),
-            'latency': Histogram(f'circuit_breaker_{name}_latency', 'Call latency')
-        }
-        self.stats = CircuitStats()
-        self._state_change_time = datetime.now()
-        self._sliding_window = SlidingWindowCounter(size=60, granularity=1)
-        self._error_threshold = ErrorThreshold(threshold=0.5, window_size=10)
-        self._response_times = SlidingWindow(size=100)
-        self._adaptive_timeout = AdaptiveTimeout(
-            min_timeout=0.1,
-            max_timeout=10.0,
-            percentile=95
-        )
-        self._failure_detector = AnomalyDetector(
-            window_size=100,
-            threshold=3.0  # Standard deviations
-        )
-        self._success_rate_tracker = SuccessRateTracker(
-            window_size=100,
-            min_samples=10
-        )
-        
-        # Initialize metrics
-        CB_STATE.labels(name=self.name).set(self.state.value)
+        CB_STATE.labels(name='circuit_breaker').set(self._state.value)
 
     async def call(self, func: Callable[..., T], *args, **kwargs) -> T:
         async with self._lock:
-            with tracer.start_span(f"circuit_breaker_{self.name}") as span:
-                span.set_attribute("circuit_state", self.state.name)
-                
-                if not await self._should_allow_request():
-                    span.set_attribute("error", "circuit_open")
-                    raise CircuitBreakerOpenError(f"Circuit {self.name} is OPEN")
+            if self._state == CircuitState.OPEN:
+                if time.time() - self._last_failure_time > self.recovery_timeout:
+                    self._state = CircuitState.HALF_OPEN
+                    CB_STATE.labels(name='circuit_breaker').set(self._state.value)
+                else:
+                    raise CircuitBreakerOpenError()
 
-                start_time = datetime.now()
-                try:
-                    result = await self._execute_with_timeout(func, *args, **kwargs)
-                    await self._on_success()
-                    return result
-
-                except Exception as e:
-                    await self._on_failure(e)
-                    span.set_attribute("error", str(e))
-                    raise
-
-                finally:
-                    duration = (datetime.now() - start_time).total_seconds()
-                    CB_LATENCY.labels(name=self.name).observe(duration)
-
-    async def _should_allow_request(self) -> bool:
-        if self.state == CircuitState.CLOSED:
-            return True
-        if self.state == CircuitState.OPEN:
-            if await self._should_transition_to_half_open():
-                self.state = CircuitState.HALF_OPEN
-                return True
-            return False
-        return self._half_open_calls < self.config.half_open_max_calls
-
-    async def _execute_with_timeout(self, func: Callable[..., T], *args, **kwargs) -> T:
-        timeout = self._get_adaptive_timeout()
-        async with async_timeout.timeout(timeout):
-            start = time.monotonic()
+            start_time = time.time()
             try:
                 result = await func(*args, **kwargs)
-                duration = time.monotonic() - start
-                self._update_timing_stats(duration)
+                if self._state == CircuitState.HALF_OPEN:
+                    self._state = CircuitState.CLOSED
+                    CB_STATE.labels(name='circuit_breaker').set(self._state.value)
+                self._failure_count = 0
+                CB_LATENCY.labels(name='circuit_breaker').observe(time.time() - start_time)
                 return result
             except Exception as e:
-                self._failure_detector.record_failure(time.monotonic())
+                self._failure_count += 1
+                CB_FAILURES.labels(name='circuit_breaker').inc()
+                if self._failure_count >= self.failure_threshold:
+                    self._state = CircuitState.OPEN
+                    self._last_failure_time = time.time()
+                    CB_STATE.labels(name='circuit_breaker').set(self._state.value)
                 raise
-
-    def _get_adaptive_timeout(self) -> float:
-        if len(self._response_times) < 10:
-            return self.config.timeout
-        # Using proper adaptive config; note: _adaptive_timeout holds the adaptive config parameters
-        p95 = quantiles(self._response_times, n=20)[18]  # 95th percentile
-        return min(max(p95 * 1.5, self._adaptive_timeout.min_timeout), 
-                   self._adaptive_timeout.max_timeout)
-
-    async def _check_state_transition(self) -> None:
-        now = datetime.now()
-        if self.state == CircuitState.OPEN:
-            if now - self._state_change_time > timedelta(seconds(self.config.recovery_timeout)):
-                logger.info(f"Circuit {self.name} transitioning from OPEN to HALF_OPEN")
-                self.state = CircuitState.HALF_OPEN
-                self._half_open_calls = 0
-                self._state_change_time = now
-                CB_STATE.labels(name=self.name).set(self.state.value)
-
-    async def _on_success(self) -> None:
-        self.stats.total_calls += 1
-        self.stats.consecutive_failures = 0
-        self.stats.last_success = datetime.now()
-        
-        if self.state == CircuitState.HALF_OPEN:
-            logger.info(f"Circuit {self.name} recovered, transitioning to CLOSED")
-            self.state = CircuitState.CLOSED
-            self._half_open_calls = 0
-            self.stats.failed_calls = 0
-            CB_STATE.labels(name=self.name).set(self.state.value)
-
-    async def _on_failure(self, error: Exception) -> None:
-        self.stats.total_calls += 1
-        self.stats.failed_calls += 1
-        self.stats.consecutive_failures += 1
-        self.stats.last_failure = datetime.now()
-        CB_FAILURES.labels(name=self.name).inc()
-
-        if (self.state == CircuitState.CLOSED and 
-            self.stats.consecutive_failures >= self.config.failure_threshold):
-            logger.warning(f"Circuit {self.name} tripped, transitioning to OPEN")
-            self.state = CircuitState.OPEN
-            self._state_change_time = datetime.now()
-            CB_STATE.labels(name=self.name).set(self.state.value)
-        elif self.state == CircuitState.HALF_OPEN:
-            logger.warning(f"Circuit {self.name} failed in HALF_OPEN, returning to OPEN")
-            self.state = CircuitState.OPEN
-            self._state_change_time = datetime.now()
-            CB_STATE.labels(name=self.name).set(self.state.value)
-
-    def get_stats(self) -> CircuitStats:
-        return self.stats
-
-    def reset(self) -> None:
-        self.state = CircuitState.CLOSED
-        self.stats = CircuitStats()
-        self._half_open_calls = 0
-        self._state_change_time = datetime.now()
-        CB_STATE.labels(name=self.name).set(self.state.value)
 
 class RedisManager:
     def __init__(self, url: str):
@@ -262,6 +157,13 @@ async def test_circuit_breaker_basic():
     async def failing_func():
         raise ValueError("test error")
         
+    for _ in range(cb.config.failure_threshold):
+        with pytest.raises(ValueError):
+            await cb.call(failing_func)
+            
+    assert cb.state == CircuitState.OPEN
+
+
     for _ in range(cb.config.failure_threshold):
         with pytest.raises(ValueError):
             await cb.call(failing_func)
