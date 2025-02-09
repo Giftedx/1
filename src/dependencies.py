@@ -10,6 +10,8 @@ from src.core.backpressure import Backpressure
 from src.core.circuit_breaker import CircuitBreaker
 from cachetools import TTLCache
 from src.utils.retry import ExponentialBackoff
+from dependency_injector import containers, providers
+from src.services.queue_manager import QueueManager
 
 T = TypeVar('T')
 
@@ -104,3 +106,23 @@ def provide_backpressure() -> Backpressure:
 
 def provide_circuit_breaker() -> CircuitBreaker:
     return CircuitBreaker(failure_threshold=5, reset_timeout=30)
+
+class Container(containers.DeclarativeContainer):
+    config = providers.Singleton(Config)
+    
+    redis_manager = providers.Singleton(
+        RedisManager.create,
+        redis_url=config.provided.REDIS_URL,
+        pool_size=config.provided.REDIS_POOL_SIZE
+    )
+    
+    plex_server = providers.Singleton(
+        PlexServer,
+        base_url=config.provided.PLEX_URL,
+        token=config.provided.PLEX_TOKEN
+    )
+    
+    queue_manager = providers.Singleton(
+        QueueManager,
+        redis_manager=redis_manager
+    )

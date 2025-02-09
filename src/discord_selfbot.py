@@ -2,11 +2,16 @@ import os
 import asyncio
 import logging
 import discord
-
-# ...existing imports...
+from discord.ext import commands
 
 logging.basicConfig(level=logging.INFO)
-client = discord.Client(intents=discord.Intents.all())
+
+class SelfBot(commands.Bot):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def on_ready(self):
+        logging.info(f"Selfbot logged in as {self.user}")
 
 # Read the voice channel ID from env (ensure this variable is set in .env)
 VOICE_CHANNEL_ID = int(os.getenv("VOICE_CHANNEL_ID", "0"))
@@ -33,11 +38,7 @@ async def initiate_voice_playback(channel, media: str):
         if vc:
             await vc.disconnect()
 
-@client.event
-async def on_ready():
-    logging.info(f"Selfbot logged in as {client.user}")
-
-@client.event
+@SelfBot.event
 async def on_message(message):
     # Only respond to DM commands to ensure selfbot safety
     if message.guild is not None: 
@@ -56,9 +57,9 @@ async def on_message(message):
             return
         await initiate_voice_playback(channel, media)
 
+async def main():
+    bot = SelfBot(command_prefix='!', self_bot=True)
+    await bot.start(os.getenv("DISCORD_SELFBOT_TOKEN"))
+
 if __name__ == "__main__":
-    token = os.getenv("DISCORD_SELFBOT_TOKEN")
-    if not token:
-        logging.error("DISCORD_SELFBOT_TOKEN not set")
-        exit(1)
-    client.run(token, bot=False)
+    asyncio.run(main())

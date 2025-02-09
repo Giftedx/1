@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Media Streaming Dashboard</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+    <div class="container">
+        {% include 'components/activity_feed.html' %}
+        {% include 'components/media_browser.html' %}
+    </div>
+
+    <!-- Move scripts to end of body -->
+    <script src="/static/js/widgets/media_browser.js"></script>
+    <script src="/static/js/widgets/activity_feed.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

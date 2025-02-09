@@ -45,39 +45,37 @@ class Metrics:
     """Enhanced thread-safe metrics collection."""
     def __init__(self):
         self._lock = Lock()
-        self._metric_configs = {
-            'active_streams': MetricConfig('active_streams_total', 
-                                         'Number of active media streams', 'gauge'),
-            'errors': MetricConfig('errors_total', 
-                                 'Error counts by type and severity', 'counter',
-                                 ['type', 'severity']),
-            'latencies': MetricConfig('operation_latency_seconds',
-                                    'Operation latencies', 'histogram',
-                                    ['operation', 'status'],
-                                    [0.01, 0.05, 0.1, 0.5, 1.0, 5.0]),
-            'resource_usage': MetricConfig('resource_usage',
-                                         'Resource usage metrics', 'gauge',
-                                         ['resource_type', 'instance'])
+        self._metrics: Dict[str, Any] = {
+            'active_streams': Gauge(
+                'active_streams_total',
+                'Number of active media streams'
+            ),
+            'stream_quality': Histogram(
+                'stream_quality_seconds',
+                'Stream quality metrics',
+                ['quality']
+            ),
+            'errors': Counter(
+                'errors_total',
+                'Total number of errors',
+                ['type', 'severity']
+            )
         }
-        self._metrics = self._initialize_metrics()
-        self._operation_timers: Dict[str, float] = {}
-        self._exit_stack = AsyncExitStack()
-        self._histogram_buckets = [
-            0.001, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0
-        ]
 
-    def _initialize_metrics(self) -> Dict[str, Any]:
-        """Initialize metrics from definitions."""
-        metrics = {}
-        for key, config in self._metric_configs.items():
-            if config.type == 'counter':
-                metrics[key] = Counter(config.name, config.description, config.labels)
-            elif config.type == 'gauge':
-                metrics[key] = Gauge(config.name, config.description, config.labels)
-            elif config.type == 'histogram':
-                metrics[key] = Histogram(config.name, config.description, 
-                                       config.labels, buckets=config.buckets)
-        return metrics
+    def increment_active_streams(self) -> None:
+        with self._lock:
+            self._metrics['active_streams'].inc()
+
+    def decrement_active_streams(self) -> None:
+        with self._lock:
+            self._metrics['active_streams'].dec()
+
+    def record_error(self, error_type: str, severity: str = 'error') -> None:
+        with self._lock:
+            self._metrics['errors'].labels(
+                type=error_type,
+                severity=severity
+            ).inc()
 
     def increment(self, metric: str, value: float = 1.0, labels: Dict[str, str] = None) -> None:
         with self._lock:
@@ -138,14 +136,6 @@ class Metrics:
         """Track resource usage."""
         self._metrics['resource_usage'].labels(resource_type=resource_type).set(value)
 
-    def record_error(self, error_type: str, severity: str = 'error') -> None:
-        """Record error with type and severity."""
-        with self._lock:
-            self._metrics['errors_total'].labels(
-                type=error_type,
-                severity=severity
-            ).inc()
-
     @contextmanager
     def batch_operation(self) -> AsyncGenerator[None, None]:
         """Context manager for batching metric operations."""
@@ -162,23 +152,6 @@ class Metrics:
     async def cleanup(self) -> None:
         """Cleanup metric resources."""
         await self._exit_stack.aclose()
-
-class MetricsCollector:
-    def __init__(self):
-        self.stream_latency = Histogram(
-            'stream_latency_seconds',
-            'Streaming latency in seconds',
-            ['stream_type']
-        )
-        self.active_streams = Gauge(
-            'active_streams',
-            'Number of active streams'
-        )
-        self.stream_errors = Counter(
-            'stream_errors_total',
-            'Number of streaming errors',
-            ['error_type']
-        )
 
 # Global metrics instance
 METRICS = Metrics()

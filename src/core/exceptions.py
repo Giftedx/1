@@ -22,8 +22,16 @@ class StreamingError(MediaBotError):
     """Raised for streaming-related errors."""
     pass
 
-class CircuitBreakerOpenError(MediaBotError):
+class CircuitBreakerError(Exception):
+    """Base class for circuit breaker exceptions."""
+    pass
+
+class CircuitBreakerOpenError(CircuitBreakerError):
     """Raised when the circuit breaker is open."""
+    pass
+
+class CircuitBreakerHalfOpenError(CircuitBreakerError):
+    """Raised when the circuit breaker is half-open."""
     pass
 
 class InvalidCommandError(MediaBotError):

@@ -1,49 +1,58 @@
 import logging
-import logging.config
-import platform
+import logging.handlers
+import os
+import socket
 import time
-from logging.handlers import RotatingFileHandler
-from functools import wraps
 from typing import Callable, Any
+from functools import wraps
+
 from pythonjsonlogger import jsonlogger
 
-def setup_logging() -> None:
+def setup_logging(log_level=logging.INFO):
     """
-    Configures JSON logging with hostname and rotates file logs.
+    Sets up logging for the application.
     """
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO,
-        handlers=[
-            logging.StreamHandler(),
-            logging.handlers.RotatingFileHandler(
-                'bot.log',
-                maxBytes=10_000_000,
-                backupCount=5
-            )
-        ]
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    log_format = jsonlogger.JsonFormatter(
+        "%(asctime)s %(hostname)s %(name)s %(levelname)s %(message)s"
     )
 
+    # Add hostname to log records
+    hostname = socket.gethostname()
+    logging.getLogger().handlers = []
     class HostnameFilter(logging.Filter):
-        def filter(self, record: logging.LogRecord) -> bool:
-            try:
-                record.hostname = platform.node()
-            except Exception:
-                record.hostname = "unknown"
+        def filter(self, record):
+            record.hostname = hostname
             return True
 
-    for handler in logging.getLogger().handlers:
-        handler.addFilter(HostnameFilter())
+    # Create a rotating file handler
+    log_dir = "logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    log_file = os.path.join(log_dir, "app.log")
+    rotating_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=1024 * 1024, backupCount=5
+    )
+    rotating_handler.setFormatter(log_format)
+    rotating_handler.addFilter(HostnameFilter())
+    logger.addHandler(rotating_handler)
 
-def set_log_level(level: str) -> None:
+    # Create a stream handler for console output
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(log_format)
+    stream_handler.addFilter(HostnameFilter())
+    logger.addHandler(stream_handler)
+
+def set_log_level(log_level):
     """
-    Dynamically sets the log level.
-    
-    :param level: The log level to set (e.g., 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
+    Sets the log level for all handlers.
     """
-    logging.getLogger().setLevel(level)
-    logger = logging.getLogger(__name__)
-    logger.info(f"Log level set to {level}")
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+    for handler in logger.handlers:
+        handler.setLevel(log_level)
 
 def log_performance(logger: logging.Logger) -> Callable:
     def decorator(func: Callable) -> Callable:
@@ -61,3 +70,7 @@ def log_performance(logger: logging.Logger) -> Callable:
                 raise
         return wrapper
     return decorator
+
+
+# Example usage (you should call setup_logging in your main application)
+# setup_logging(log_level=logging.DEBUG)
