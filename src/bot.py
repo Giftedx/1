@@ -20,6 +20,7 @@ from src.monitoring.heartbeat import HeartbeatMonitor
 from prometheus_client import Counter, Histogram, Gauge
 from src.utils.async_limiter import AsyncRateLimiter
 from src.utils.error_handler import ErrorHandler
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class MediaStreamingBot(commands.Bot):
         self._command_workers = []
         self._max_concurrent_commands = 5
         self._command_semaphore = asyncio.Semaphore(10)
+        self._cleanup_tasks: Set[asyncio.Task] = set()
         self._command_timeouts = {}
 
     @asynccontextmanager
@@ -223,8 +225,10 @@ class MediaStreamingBot(commands.Bot):
             await asyncio.sleep(self.config.HEALTH_CHECK_INTERVAL)
 
     async def close(self) -> None:
-        await self.redis_manager.close()
-        self.active_streams.decrement()
+        if self.redis_manager:
+            await self.redis_manager.close()
+        if self.active_streams:
+            self.active_streams.decrement()
         await super().close()
         logger.info("Bot shutdown complete.")
 
@@ -273,3 +277,22 @@ class MediaStreamingBot(commands.Bot):
                 logger.error(f"Command processing error: {e}", exc_info=True)
                 self._errors.labels(type=type(e).__name__).inc()
                 await message.channel.send("An error occurred processing your command.")
+
+    async def _execute_command(self, cmd: str, ctx: commands.Context):
+        """Executes a command, handling rate limits and command-specific logic."""
+        try:
+            # Apply global rate limit
+            async with self._command_limiter:
+                # Execute the command
+                await ctx.invoke(cmd)
+        except commands.CommandNotFound:
+            await ctx.send("Command not found.")
+        except commands.MissingRequiredArgument:
+            await ctx.send("Missing required arguments.")
+        except commands.BadArgument:
+            await ctx.send("Invalid arguments provided.")
+        except commands.CommandOnCooldown as e:
+            await ctx.send(f"Command is on cooldown, try again in {e.retry_after:.2f} seconds.")
+        except Exception as e:
+            logger.error(f"Command execution failed: {e}", exc_info=True)
+            await ctx.send("An error occurred while executing the command.")

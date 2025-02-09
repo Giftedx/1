@@ -1,6 +1,7 @@
 import re
 from typing import Pattern, Optional
 from pathlib import Path
+import bleach
 
 class SecurityValidator:
     SAFE_PATH_PATTERN: Pattern = re.compile(r'^[a-zA-Z0-9\-_./]+$')
@@ -20,3 +21,10 @@ class SecurityValidator:
     @classmethod
     def is_safe_url(cls, url: str) -> bool:
         return url.startswith(('http://', 'https://'))
+
+    @classmethod
+    def sanitize_html(cls, html: str) -> str:
+        """Sanitize HTML input to prevent XSS attacks."""
+        allowed_tags = bleach.ALLOWED_TAGS + ['p', 'br', 'ul', 'ol', 'li', 'strong', 'em', 'a']
+        allowed_attributes = bleach.ALLOWED_ATTRIBUTES
+        return bleach.clean(html, tags=allowed_tags, attributes=allowed_attributes, strip=True)

@@ -59,8 +59,19 @@ class Metrics:
                 'errors_total',
                 'Total number of errors',
                 ['type', 'severity']
+            ),
+            'latencies': Histogram(  # Added latencies histogram
+                'operation_latency_seconds',
+                'Latency of various operations',
+                ['operation', 'status']
+            ),
+            'resource_usage': Gauge(  # Added resource_usage gauge
+                'resource_usage',
+                'Resource usage metrics',
+                ['resource_type']
             )
         }
+        self._exit_stack = AsyncExitStack()
 
     def increment_active_streams(self) -> None:
         with self._lock:
@@ -114,7 +125,7 @@ class Metrics:
                 self._metrics['latencies'].labels(operation=operation, status=status).observe(duration)
 
     @contextlib.contextmanager
-    def timing_context(self, operation: str, labels: Optional[Dict[str, str]] = None) -> None:
+    def timing_context(self, operation: str, labels: Optional[Dict[str, str]] = None) -> ContextManager:
         """Enhanced timing context with error tracking and resource monitoring."""
         start_time = time.monotonic()
         status = 'success'
@@ -126,15 +137,21 @@ class Metrics:
             raise
         finally:
             duration = time.monotonic() - start_time
-            self._metrics['latencies'].labels(
-                operation=operation,
-                status=status,
-                **(labels or {})
-            ).observe(duration)
+            if 'latencies' in self._metrics:  # Check if 'latencies' exists
+                self._metrics['latencies'].labels(
+                    operation=operation,
+                    status=status,
+                    **(labels or {})
+                ).observe(duration)
+            else:
+                logging.warning("Latencies metric not initialized.")
 
     def track_resource(self, resource_type: str, value: float) -> None:
         """Track resource usage."""
-        self._metrics['resource_usage'].labels(resource_type=resource_type).set(value)
+        if 'resource_usage' in self._metrics:  # Check if 'resource_usage' exists
+            self._metrics['resource_usage'].labels(resource_type=resource_type).set(value)
+        else:
+            logging.warning("Resource usage metric not initialized.")
 
     @contextmanager
     def batch_operation(self) -> AsyncGenerator[None, None]:

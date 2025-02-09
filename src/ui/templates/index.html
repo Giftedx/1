@@ -1,18 +1,57 @@
+html -->
 <!DOCTYPE html>
 <html>
 <head>
     <title>Media Streaming Dashboard</title>
     <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
 </head>
 <body>
     <div class="container">
-        {% include 'components/activity_feed.html' %}
-        {% include 'components/media_browser.html' %}
+        <h1>Media Streaming Dashboard</h1>
+        <div id="system-stats">
+            <h2>System Statistics</h2>
+            <p>CPU Usage: <span id="cpu-usage"></span>%</p>
+            <p>Memory Usage: <span id="memory-usage"></span>%</p>
+            <p>Disk Usage: <span id="disk-usage"></span>%</p>
+            <p>Temperature: <span id="temperature"></span>°C</p>
+            <p>Network Usage: Bytes Sent - <span id="bytes-sent"></span>, Bytes Received - <span id="bytes-recv"></span></p>
+        </div>
+        <div id="streams-info">
+            <h2>Active Streams</h2>
+            <ul id="streams-list">
+            </ul>
+        </div>
     </div>
 
-    <!-- Move scripts to end of body -->
-    <script src="/static/js/widgets/media_browser.js"></script>
-    <script src="/static/js/widgets/activity_feed.js"></script>
-    <script src="/static/js/main.js"></script>
+    <script>
+        var ws = new WebSocket("ws://localhost:8000/ws/metrics");
+
+        ws.onmessage = function(event) {
+            var data = JSON.parse(event.data);
+            updateSystemStats(data.system_stats);
+            updateStreamsInfo(data.streams_info);
+        };
+
+        function updateSystemStats(stats) {
+            document.getElementById("cpu-usage").innerText = stats.cpu_usage;
+            document.getElementById("memory-usage").innerText = stats.memory_usage;
+            document.getElementById("disk-usage").innerText = stats.disk_usage;
+            document.getElementById("temperature").innerText = stats.temperature;
+            document.getElementById("bytes-sent").innerText = stats.network_usage.bytes_sent;
+            document.getElementById("bytes-recv").innerText = stats.network_usage.bytes_recv;
+        }
+
+        function updateStreamsInfo(streams) {
+            var streamsList = document.getElementById("streams-list");
+            streamsList.innerHTML = "";
+            streams.forEach(function(stream) {
+                var li = document.createElement("li");
+                li.innerText = stream.title + " - Quality: " + stream.quality + " - Status: " + stream.status;
+                streamsList.appendChild(li);
+            });
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

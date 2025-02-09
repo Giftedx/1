@@ -1,128 +1,354 @@
 import asyncio
-from typing import AsyncGenerator, TypeVar, Generic, Dict, Callable, Awaitable, AsyncContextManager, Optional
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
+import logging
+import discord
+from discord.ext import commands
 from src.utils.config import Config
-from src.core.redis_manager import RedisManager
+from src.core.queue_manager import QueueManager
+from src.core.ffmpeg_manager import FFmpegManager
 from src.plex_server import PlexServer
-from src.metrics import ACTIVE_STREAMS, ActiveStreams
-from src.core.backpressure import Backpressure
-from src.core.circuit_breaker import CircuitBreaker
-from cachetools import TTLCache
-from src.utils.retry import ExponentialBackoff
-from dependency_injector import containers, providers
-from src.services.queue_manager import QueueManager
+from src.utils.rate_limiter import RateLimiter
+from src.cogs.media_commands import MediaCommands
+from src.dependencies import provide_redis_manager, provide_plex_server, provide_active_streams
+import signal
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional, Set, Dict, Any
+from src.core.health_check import HealthCheck
+from src.utils.performance import measure_latency, CircuitBreaker
+from src.core.di_container import Container
+from src.core.service_manager import ServiceManager
+from src.monitoring.heartbeat import HeartbeatMonitor
+from prometheus_client import Counter, Histogram, Gauge
+from src.utils.async_limiter import AsyncRateLimiter
+from src.utils.error_handler import ErrorHandler
+import time
 
-T = TypeVar('T')
+logger = logging.getLogger(__name__)
 
-@dataclass
-class ResourceConfig:
-    max_retries: int = 3
-    retry_delay: float = 1.0
-    timeout: float = 30.0
+class RedisNotAvailableError(Exception):
+    """Custom exception for when Redis is not available."""
+    pass
 
-class ResourceManager(Generic[T]):
-    def __init__(self, config: ResourceConfig):
+class FfmpegError(Exception):
+    """Custom exception for FFmpeg related errors."""
+    pass
+
+class PlexServerError(Exception):
+    """Custom exception for Plex server related errors."""
+    pass
+
+class MediaStreamingBot(commands.Bot):
+    """
+    Custom Discord bot for media streaming.
+    """
+    def __init__(self, config: Config):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(
+            command_prefix="!",
+            intents=intents,
+            heartbeat_timeout=60.0,
+            activity=discord.Activity(type=discord.ActivityType.watching, name="media streams")
+        )
         self.config = config
-        self._resources: Dict[str, T] = {}
-        self._metrics = METRICS
-        self._resource_stats: Dict[str, Dict[str, float]] = {}
-        self._cleanup_hooks: Dict[str, Callable] = {}
-        self._retry_backoff = ExponentialBackoff(min_delay=1.0, max_delay=30.0)
-        self._resource_cache = TTLCache(maxsize=100, ttl=3600)
-        self._resource_monitor = ResourceMonitor()
-        self._cleanup_scheduler = CleanupScheduler()
-        self._resource_lifecycle = ResourceLifecycleManager(
-            max_idle_time=300,
-            cleanup_interval=60
+        # Initialize core services
+        self.redis_manager = None
+        self.queue_manager = None
+        self.ffmpeg_manager = FFmpegManager()  # assumes a proper implementation exists
+        self.plex_server = None
+        self.rate_limiter = RateLimiter(
+            config.RATE_LIMIT_REQUESTS,
+            config.RATE_LIMIT_PERIOD
         )
-        self._health_monitor = HealthMonitor(
-            check_interval=30,
-            failure_threshold=3
+        self.active_streams = None
+        self._shutdown_event = asyncio.Event()
+        self.health_check = HealthCheck()
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=config.CIRCUIT_BREAKER_THRESHOLD,
+            reset_timeout=config.CIRCUIT_BREAKER_TIMEOUT
         )
-
-    async def get_or_create(self, key: str, factory: Callable[[], Awaitable[T]]) -> T:
-        if resource := await self._get_cached_resource(key):
-            return resource
-
-        async with self._resource_lock(key):
-            return await self._create_and_cache_resource(key, factory)
-
-    async def _get_cached_resource(self, key: str) -> Optional[T]:
-        if resource := self._resource_cache.get(key):
-            if await self._health_monitor.is_healthy(resource):
-                return resource
-            await self._cleanup_resource(key, resource)
-        return None
-
-    async def cleanup_resources(self) -> None:
-        stale_resources = await self._resource_monitor.get_stale_resources()
-        for resource in stale_resources:
-            await self._cleanup_resource(resource)
-            
-    async def _cleanup_resource(self, resource: T) -> None:
-        if hasattr(resource, 'close'):
-            await resource.close()
-        elif hasattr(resource, 'cleanup'):
-            await resource.cleanup()
+        self.container = None
+        self.service_manager = ServiceManager()
+        self.heartbeat = HeartbeatMonitor()
+        self._command_latency = Histogram(
+            'command_latency_seconds',
+            'Command execution latency',
+            ['command']
+        )
+        self._errors = Counter(
+            'bot_errors_total',
+            'Number of bot errors',
+            ['type']
+        )
+        self._metrics = {
+            'command_errors': Counter('bot_command_errors_total', 
+                                    'Command error count', ['command']),
+            'command_latency': Histogram('bot_command_latency_seconds',
+                                       'Command execution time', ['command']),
+            'active_commands': Gauge('bot_active_commands',
+                                   'Number of active commands')
+        }
+        self._command_contexts: Dict[str, Any] = {}
+        self._command_limiter = AsyncRateLimiter(
+            rate=100,
+            period=60.0,
+            burst_size=20
+        )
+        self._error_handler = ErrorHandler(
+            max_retries=3,
+            backoff_factor=1.5
+        )
+        self._command_queue = asyncio.Queue()
+        self._command_workers = []
+        self._max_concurrent_commands = 5
+        self._command_semaphore = asyncio.Semaphore(10)
+        self._cleanup_tasks: Set[asyncio.Task] = set()
+        self._command_timeouts = {}
 
     @asynccontextmanager
-    async def resource_context(self, key: str) -> AsyncContextManager[T]:
-        """Manage resource lifecycle with metrics."""
+    async def graceful_shutdown(self) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            self._shutdown_event.set()
+            cleanup_timeout = self.config.GRACEFUL_SHUTDOWN_TIMEOUT
+            try:
+                await asyncio.wait_for(self._cleanup(), timeout=cleanup_timeout)
+            except asyncio.TimeoutError:
+                logger.error(f"Cleanup timed out after {cleanup_timeout}s")
+
+    async def _cleanup(self) -> None:
+        tasks = [
+            self.service_manager.cleanup(),
+            self.heartbeat.shutdown(),
+            self._cancel_cleanup_tasks(),
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _register_cleanup_task(self, task: asyncio.Task) -> None:
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def _cancel_cleanup_tasks(self) -> None:
+        for task in self._cleanup_tasks:
+            task.cancel()
+        if self._cleanup_tasks:
+            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+
+    async def setup_hook(self) -> None:
+        try:
+            # Start command workers
+            for _ in range(self._max_concurrent_commands):
+                worker = asyncio.create_task(self._command_worker())
+                self._command_workers.append(worker)
+            
+            # Initialize dependency container and services
+            try:
+                self.redis_manager = await provide_redis_manager(self.config)
+            except RedisNotAvailableError as e:
+                logger.error(f"Failed to initialize redis manager: {e}", exc_info=True)
+                # Potentially trigger a circuit breaker or other recovery mechanism
+                raise
+
+            try:
+                self.plex_server = await provide_plex_server(self.config)
+            except PlexServerError as e:
+                logger.error(f"Failed to initialize plex server: {e}", exc_info=True)
+                # Potentially trigger a circuit breaker or other recovery mechanism
+                raise
+
+            try:
+                self.active_streams = provide_active_streams()
+            except Exception as e:
+                logger.error(f"Failed to initialize active streams: {e}", exc_info=True)
+                raise
+
+            try:
+                self.container = Container()
+                self.container.config.override(self.config)
+                self.container.wire(modules=[__name__, "src.cogs.media_commands"])
+            except Exception as e:
+                logger.error(f"Failed to initialize container: {e}", exc_info=True)
+                raise
+
+            try:
+                # Register services with proper dependencies
+                await self.service_manager.register("redis", self.redis_manager)
+                await self.service_manager.register("ffmpeg", self.ffmpeg_manager, {"redis"})
+                await self.service_manager.register("queue", self.container.queue_manager(), {"redis"})
+                await self.service_manager.register("plex", self.plex_server)
+            except Exception as e:
+                logger.error(f"Failed to register services: {e}", exc_info=True)
+                raise
+
+            try:
+                # Register heartbeats and health checks
+                self.heartbeat.register("redis", self._check_redis_health)
+                self.heartbeat.register("ffmpeg", self._check_ffmpeg_health)
+                self.heartbeat.register("plex", self._check_plex_health)
+            except Exception as e:
+                logger.error(f"Failed to register heartbeats: {e}", exc_info=True)
+                raise
+
+            try:
+                await self.service_manager.start_services()
+                await self.heartbeat.start()
+            except Exception as e:
+                logger.error(f"Failed to start services: {e}", exc_info=True)
+                raise
+
+            try:
+                await self.add_cog(MediaCommands(self))
+                logger.info("Bot setup complete.")
+            except Exception as e:
+                logger.error(f"Failed to add cog: {e}", exc_info=True)
+                raise
+
+            try:
+                # Register signal handlers
+                for sig in (signal.SIGTERM, signal.SIGINT):
+                    self.loop.add_signal_handler(sig, self._handle_signal)
+            except Exception as e:
+                logger.error(f"Failed to register signal handlers: {e}", exc_info=True)
+                raise
+
+            try:
+                # Register health checks
+                self.health_check.register("redis", self._check_redis_health)
+                self.health_check.register("ffmpeg", self._check_ffmpeg_health)
+                self.health_check.register("plex", self._check_plex_health)
+            except Exception as e:
+                logger.error(f"Failed to register health checks: {e}", exc_info=True)
+                raise
+            
+            try:
+                # Start health monitoring
+                health_task = asyncio.create_task(self._health_monitor())
+                self._register_cleanup_task(health_task)
+            except Exception as e:
+                logger.error(f"Failed to start health monitor: {e}", exc_info=True)
+                raise
+
+    async def _command_worker(self):
+        while True:
+            cmd, ctx = await self._command_queue.get()
+            try:
+                async with self._error_handler.handle_errors():
+                    await self._execute_command(cmd, ctx)
+            except Exception as e:
+                logger.error(f"Command execution error: {e}", exc_info=True)
+            finally:
+                self._command_queue.task_done()
+
+    def _handle_signal(self) -> None:
+        self._shutdown_event.set()
+        logger.info("Shutdown signal received")
+
+    async def _monitor(self) -> None:
+        while not self._shutdown_event.is_set():
+            try:
+                await self._check_health()
+            except Exception as e:
+                logger.error(f"Health check failed: {e}")
+            await asyncio.sleep(self.config.HEALTH_CHECK_INTERVAL)
+
+    @measure_latency("health_check")
+    async def _check_health(self) -> None:
+        await self.health_check.run_checks()
+
+    async def _check_redis_health(self) -> bool:
+        try:
+            await self.redis_manager.redis.ping()
+            return True
+        except Exception:
+            return False
+
+    async def _check_ffmpeg_health(self) -> bool:
+        return len(self.ffmpeg_manager.active_processes) < self.config.MAX_CONCURRENT_STREAMS
+
+    async def _check_plex_health(self) -> bool:
+        try:
+            await self.plex_server.ping()
+            return True
+        except Exception:
+            return False
+
+    async def _health_monitor(self) -> None:
+        while not self._shutdown_event.is_set():
+            try:
+                await self._check_health()
+            except Exception as e:
+                logger.error(f"Health check failed: {e}")
+            await asyncio.sleep(self.config.HEALTH_CHECK_INTERVAL)
+
+    async def close(self) -> None:
+        if self.redis_manager:
+            await self.redis_manager.close()
+        if self.active_streams:
+            self.active_streams.decrement()
+        await super().close()
+        logger.info("Bot shutdown complete.")
+
+    async def on_ready(self) -> None:
+        logger.info(f"Logged in as {self.user}")
+
+    async def on_message(self, message: discord.Message) -> None:
+        if await self.rate_limiter.is_rate_limited(str(message.author.id)):
+            await message.channel.send("You are being rate limited. Please try again later.")
+            return
+        await self.process_commands(message)
+
+    async def on_error(self, event_method: str, *args, **kwargs) -> None:
+        logger.error(f"Error in {event_method}", exc_info=True)
+
+    async def on_command_error(self, ctx: commands.Context, error: Exception) -> None:
+        error_type = type(error).__name__
+        self._errors.labels(type=error_type).inc()
+        logger.error(f"Command error: {error}", exc_info=True)
+        await super().on_command_error(ctx, error)
+
+    async def on_command(self, ctx: commands.Context) -> None:
         start_time = time.monotonic()
         try:
-            resource = await self.get_or_create(key)
-            yield resource
+            await super().on_command(ctx)
         finally:
             duration = time.monotonic() - start_time
-            self._resource_stats[key] = {
-                'last_access': time.monotonic(),
-                'usage_duration': duration
-            }
+            self._command_latency.labels(ctx.command.name).observe(duration)
 
-async def provide_redis_manager(config: Config) -> RedisManager:
-    return await RedisManager.create(str(config.REDIS_URL), config.REDIS_POOL_SIZE)
+    async def process_commands(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
 
-@asynccontextmanager
-async def get_redis_manager(config: Config) -> AsyncGenerator[RedisManager, None]:
-    manager = await RedisManager.create(
-        redis_url=str(config.REDIS_URL),
-        pool_size=config.REDIS_POOL_SIZE,
-        max_retries=3
-    )
-    try:
-        yield manager
-    finally:
-        await manager.close()
+        async with self._command_semaphore:
+            cmd_key = f"{message.author.id}:{message.content}"
+            
+            # Check command cooldown
+            if self._command_timeouts.get(cmd_key, 0) > time.time():
+                await message.channel.send("Please wait before using this command again.")
+                return
+                
+            try:
+                self._command_timeouts[cmd_key] = time.time() + self.config.COMMAND_COOLDOWN
+                await super().process_commands(message)
+            except Exception as e:
+                logger.error(f"Command processing error: {e}", exc_info=True)
+                self._errors.labels(type=type(e).__name__).inc()
+                await message.channel.send("An error occurred processing your command.")
 
-async def provide_plex_server(config: Config) -> PlexServer:
-    return PlexServer(str(config.PLEX_URL), config.PLEX_TOKEN)
-
-def provide_active_streams() -> ActiveStreams:
-    return ACTIVE_STREAMS
-
-def provide_backpressure() -> Backpressure:
-    return Backpressure(max_concurrent=100, max_queue_size=1000)
-
-def provide_circuit_breaker() -> CircuitBreaker:
-    return CircuitBreaker(failure_threshold=5, reset_timeout=30)
-
-class Container(containers.DeclarativeContainer):
-    config = providers.Singleton(Config)
-    
-    redis_manager = providers.Singleton(
-        RedisManager.create,
-        redis_url=config.provided.REDIS_URL,
-        pool_size=config.provided.REDIS_POOL_SIZE
-    )
-    
-    plex_server = providers.Singleton(
-        PlexServer,
-        base_url=config.provided.PLEX_URL,
-        token=config.provided.PLEX_TOKEN
-    )
-    
-    queue_manager = providers.Singleton(
-        QueueManager,
-        redis_manager=redis_manager
-    )
+    async def _execute_command(self, cmd: str, ctx: commands.Context):
+        """Executes a command, handling rate limits and command-specific logic."""
+        try:
+            # Apply global rate limit
+            async with self._command_limiter:
+                # Execute the command
+                await ctx.invoke(cmd)
+        except commands.CommandNotFound:
+            await ctx.send("Command not found.")
+        except commands.MissingRequiredArgument:
+            await ctx.send("Missing required arguments.")
+        except commands.BadArgument:
+            await ctx.send("Invalid arguments provided.")
+        except commands.CommandOnCooldown as e:
+            await ctx.send(f"Command is on cooldown, try again in {e.retry_after:.2f} seconds.")
+        except Exception as e:
+            logger.error(f"Command execution failed: {e}", exc_info=True)
+            await ctx.send("An error occurred while executing the command.")

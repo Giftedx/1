@@ -1,0 +1,15 @@
+body {
+    font-family: sans-serif;
+    margin: 20px;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+#system-stats, #streams-info {
+    margin-bottom: 20px;
+    padding: 10px;
+    border: 1px solid #ccc;
+}

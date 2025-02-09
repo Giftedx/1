@@ -14,6 +14,7 @@ from src.utils.priority_queue import AdaptivePriorityQueue
 from datetime import datetime, timedelta
 from src.metrics import METRICS
 from enum import Enum
+import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,9 @@ class QueueManager:
     """
     Manages the media queue using an in-memory queue.
     """
-    def __init__(self, max_length: int, redis_manager: RedisManager) -> None:
+    def __init__(self, max_length: int, redis_url: str):
+        self.redis = redis.Redis.from_url(redis_url)
         self.max_length = max_length
-        self.redis_manager = redis_manager  # You might not need this if not using Redis
         self.queue_key = "media_queue"  # You might not need this if not using Redis
         self.stats_key = "queue_stats"  # You might not need this if not using Redis
         self.priority_queues = {
@@ -137,3 +138,6 @@ class QueueManager:
             self.queue.clear()
             self.current_item = None
             METRICS.set_value('queue_length', 0)
+
+    async def add_item(self, item: str):
+        await self.redis.rpush("media_queue", item)

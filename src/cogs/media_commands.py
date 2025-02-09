@@ -28,6 +28,7 @@ class MediaRequest(BaseModel):
             raise ValueError("Media file does not exist at the specified path.")
         return v
 
+
 class MediaCommands(commands.Cog):
     """
     Cog containing media‑related commands.
@@ -39,41 +40,46 @@ class MediaCommands(commands.Cog):
     @commands.command(name='play')
     @measure_latency("play_command")
     async def play(self, ctx: commands.Context, *, media_query: str):
-        async with ctx.typing():
-            try:
-                if not media_query or not SecurityValidator.validate_media_path(media_query):
-                    await ctx.send("❌ Invalid media query.")
-                    return
+        """Play media based on user query."""
+        DISCORD_COMMANDS.inc()
+        try:
+            # Sanitize user input
+            media_query = SecurityValidator.sanitize_html(media_query)
 
-                if await self.bot.rate_limiter.is_rate_limited(str(ctx.author.id)):
-                    await ctx.send("❌ Rate limit exceeded. Please try again later.")
-                    return
+            # Basic validation to prevent empty queries
+            if not media_query:
+                await ctx.send("Please provide a media title to play.")
+                return
 
-                items = await self.bot.plex_server.search_media(media_query)
-                if not items:
-                    await ctx.send("❌ No media found.")
-                    return
+            # Search for the media
+            media_info = await self.bot.plex_manager.search_media(media_query)
+            if not media_info:
+                await ctx.send(f"Media '{media_query}' not found.")
+                return
 
-                item = items[0]
-                media_req = MediaRequest(
-                    title=item.title,
-                    path=item.media[0].parts[0].file,
-                    requester=str(ctx.author.id),
-                    quality=self.bot.config.DEFAULT_QUALITY.value
-                )
+            # Get the stream URL
+            stream_url = await self.bot.plex_manager.get_stream_url(media_info[0])
+            if not stream_url:
+                await ctx.send(f"Could not retrieve stream URL for '{media_query}'.")
+                return
 
-                await self.bot.queue_manager.add(media_req.dict())
-                async with self.bot.ffmpeg_manager.stream_session(media_req.path, media_req.quality):
-                    # Replace with an actual streaming routine instead of sleep.
-                    await asyncio.sleep(1)
-                await ctx.send(f"✅ Added {media_req.title} to the queue.")
-            except (QueueFullError, RateLimitExceededError, MediaNotFoundError) as specific_err:
-                logger.error(f"Media play error: {specific_err}")
-                await ctx.send(f"❌ Error: {specific_err}")
-            except Exception as e:
-                logger.error(f"Unhandled error in play command: {e}", exc_info=True)
-                await ctx.send("❌ An unexpected error occurred.")
-                
+            # Connect to voice channel and play media
+            voice_channel = ctx.author.voice.channel
+            if not voice_channel:
+                await ctx.send("You must be in a voice channel to use this command.")
+                return
+
+            await self.bot.media_player.play(stream_url, voice_channel)
+            await ctx.send(f"Now playing '{media_info[0].title}'.")
+
+        except MediaNotFoundError:
+            await ctx.send(f"Media '{media_query}' not found.")
+        except StreamingError as e:
+            await ctx.send(f"Streaming error: {e}")
+        except Exception as e:
+            logger.exception(f"Error in play command: {e}")
+            await ctx.send(f"An error occurred: {e}")
+
     @commands.command(name='queue')
     @measure_latency("queue_command")
     async def queue(self, ctx: commands.Context):
@@ -82,14 +88,12 @@ class MediaCommands(commands.Cog):
         """
         try:
             queue_items = await self.bot.redis_manager.execute('LRANGE', 'media_queue', 0, -1)
-            if not queue_items:
-                await ctx.send("ℹ️ The media queue is empty.")
-                return
+            if queue_items:
+                queue_list = "\n".join([item.decode('utf-8') for item in queue_items])
+                await ctx.send(f"Current Queue:\n{queue_list}")
+            else:
+                await ctx.send("The queue is currently empty.")
 
-            embed = discord.Embed(title="Media Queue", colour=discord.Colour.blue())
-            for idx, item in enumerate(queue_items, start=1):
-                embed.add_field(name=f"Item {idx}", value=item, inline=False)
-            await ctx.send(embed=embed)
         except Exception as e:
-            logger.error(f"Error in 'queue' command: {e}", exc_info=True)
-            await ctx.send("❌ An error occurred while retrieving the queue.")
+            logger.exception(f"Error retrieving queue: {e}")
+            await ctx.send("Could not retrieve the queue. Check the logs for details.")

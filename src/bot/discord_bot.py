@@ -1,6 +1,6 @@
 import logging
 import asyncio
-import os # Import the os module
+import os  # Import the os module
 from typing import Optional
 import discord
 from discord.ext import commands
@@ -13,9 +13,10 @@ from src.metrics import DISCORD_COMMANDS, VOICE_CONNECTIONS
 from src.core.rate_limiter import RateLimiter
 from src.core.exceptions import MediaNotFoundError, StreamingError
 from src.core.config import Settings
-from plexapi.server import PlexServer # Import PlexServer
+from plexapi.server import PlexServer  # Import PlexServer
 
 logger = logging.getLogger(__name__)
+
 
 class MediaBot(commands.Bot):
     @inject
@@ -25,7 +26,7 @@ class MediaBot(commands.Bot):
         plex_manager: PlexManager = Provide[Container.plex_manager],
         media_player: MediaPlayer = Provide[Container.media_player],
         queue_manager: QueueManager = Provide[Container.queue_manager],
-        rate_limiter: RateLimiter = Provide[Container.rate_limiter]
+        rate_limiter: RateLimiter = Provide[Container.rate_limiter],
     ):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -49,26 +50,37 @@ class MediaBot(commands.Bot):
         logger.info(f"Bot ready: {self.user}")
         await self.change_presence(
             activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name=f"{self.command_prefix}help"
+                type=discord.ActivityType.watching, name=f"{self.command_prefix}help"
             )
         )
 
     async def on_command_error(self, ctx, error):
         self._error_count += 1
         self._last_error = error
-        DISCORD_COMMANDS.labels(status='error').inc()
-        
-        if isinstance(error, MediaNotFoundError):
-            await ctx.send("❌ Could not find the requested media. Please check your search terms.")
-            return
-            
-        if isinstance(error, StreamingError):
-            await ctx.send("❌ Failed to start media playback. Please try again later.")
+        DISCORD_COMMANDS.labels(status="error").inc()
+
+        if isinstance(error, commands.CommandInvokeError):
+            original = error.original
+            if isinstance(original, MediaNotFoundError):
+                await ctx.send(
+                    "❌ Could not find the requested media. Please check your search terms."
+                )
+                return
+
+            if isinstance(original, StreamingError):
+                await ctx.send(
+                    "❌ Failed to start media playback. Please try again later."
+                )
+                return
+
+            logger.error(f"Command error: {original}", exc_info=original)
+            await ctx.send("An error occurred. Please try again later.")
             return
 
         if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(f"Please wait {error.retry_after:.1f}s before using this command again.")
+            await ctx.send(
+                f"Please wait {error.retry_after:.1f}s before using this command again."
+            )
             return
 
         if isinstance(error, commands.MissingPermissions):
@@ -103,6 +115,7 @@ class MediaBot(commands.Bot):
                 await self.close()
 
         asyncio.run(runner())
+
 
 async def play_media(ctx, *, media: str):
     # Example usage of Plex:

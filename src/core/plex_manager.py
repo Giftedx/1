@@ -134,3 +134,6 @@ class PlexManager:
     def invalidate_cache(self) -> None:
         """Clear the search cache."""
         self.search_media.cache_clear()
+
+    async def search_media(self, query: str):
+        raise Exception("Simulated Plex error")

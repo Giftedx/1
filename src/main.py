@@ -4,6 +4,7 @@ import asyncio
 import signal
 from typing import NoReturn
 import discord
+from discord.ext import commands
 from dependency_injector.wiring import inject, Provide
 from src.core.di_container import Container
 from src.core.redis_manager import RedisManager
@@ -15,9 +16,10 @@ SERVICE_MODE = os.getenv("SERVICE_MODE", "bot")  # 'bot' or 'selfbot'
 
 if SERVICE_MODE == "selfbot":
     from src.discord_selfbot import SelfBot  # Import the class
-    client = SelfBot
+    ClientClass = SelfBot
 else:
-    from src.bot.discord_bot import MediaBot as client  # Import the class
+    from src.bot.discord_bot import MediaBot as MediaBot  # Import the class
+    ClientClass = MediaBot
 
 class GracefulExit(SystemExit):
     """Exception raised for graceful application shutdown."""
@@ -54,6 +56,9 @@ async def run_discord_client(
     except GracefulExit as e:
         logging.info(f"Application exited gracefully on {e.signame}")
         return
+    except discord.LoginFailure as e:
+        logging.error("Discord login failure: Ensure your token is valid.", exc_info=True)
+        return
     except Exception as e:
         logging.exception("Error running client:")
     finally:
@@ -71,14 +76,11 @@ async def main() -> NoReturn:
         loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s, loop)))
     
     container = Container()
-    container.config.from_dict(settings.dict())
+    container.config.from_dict(os.environ)  # Use environment variables directly
     container.wire(modules=[__name__])
 
     # Resolve the client using the container
-    if SERVICE_MODE == "bot":
-        client = container.discord_bot()
-    else:
-        client = container.selfbot()
+    client: commands.Bot = container.client()
 
     try:
         await run_discord_client(client, token)
@@ -91,4 +93,5 @@ async def main() -> NoReturn:
         await client.close()
 
 if __name__ == "__main__":
+    settings = Settings()
     asyncio.run(main())
