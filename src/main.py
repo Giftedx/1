@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import signal
-from typing import NoReturn
+from typing import NoReturn, Optional
 import discord
 from discord.ext import commands
 from dependency_injector.wiring import inject, Provide
@@ -10,6 +10,7 @@ from src.core.di_container import Container
 from src.core.redis_manager import RedisManager
 from src.utils.rate_limiter import RateLimiter
 from src.core.config import Settings
+from src.metrics import METRICS
 
 logging.basicConfig(level=logging.INFO)
 SERVICE_MODE = os.getenv("SERVICE_MODE", "bot")  # 'bot' or 'selfbot'
@@ -45,6 +46,43 @@ async def shutdown(signal: signal.Signals, loop: asyncio.AbstractEventLoop) -> N
     loop.stop()
     raise GracefulExit(signal.name)
 
+# Enhanced voice playback using robust session management and error handling.
+async def initiate_voice_playback(channel: discord.VoiceChannel, media: str):
+    vc = None
+    try:
+        METRICS.increment_active_streams()  # Increment active streams
+        vc = await channel.connect()
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-i", media, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        # Check if ffmpeg started successfully
+        if process.returncode is not None:
+            logging.error(f"FFmpeg failed to start with return code: {process.returncode}")
+            # await channel.send("❌ FFmpeg failed to start.") # Removed because channel is a discord.VoiceChannel
+            return
+
+        while True:
+            data = await process.stdout.read(4096)
+            if not data:
+                break  # no more data, exit loop
+            try:
+                await vc.send_audio_packet(data)
+            except Exception as e:
+                logger.error(f"Failed to send audio packet: {e}", exc_info=True)
+                break
+        await process.wait()
+        logging.info("Playback finished.")
+    except asyncio.CancelledError:
+        logger.info("Playback cancelled.")
+    except Exception as e:
+        logging.exception("Voice playback error")
+    finally:
+        METRICS.decrement_active_streams()  # Decrement active streams
+        if vc and vc.is_connected():
+            await vc.disconnect()
+
 @inject
 async def run_discord_client(
     client: commands.Bot,  # Use commands.Bot as the base class
@@ -65,7 +103,7 @@ async def run_discord_client(
         await client.close()
 
 async def main() -> NoReturn:
-    token_env = "BOT_TOKEN" if SERVICE_MODE == "bot" else "STREAMING_BOT_TOKEN"
+    token_env = "BOT_TOKEN" if SERVICE_MODE == "bot" else "DISCORD_SELFBOT_TOKEN"
     token = os.getenv(token_env)
     if not token:
         logging.error(f"{token_env} not set")

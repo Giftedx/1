@@ -15,14 +15,17 @@ class ActivityItem:
 
 class ActivityFeedWidget:
     template = """
-    <div class="activity-feed">
+    <div class="activity-feed widget">
         <div class="feed-header">
             <div class="feed-filters">
-                <div class="btn-group">
+                <div class="btn-group" role="group" aria-label="Activity Filters">
                     {filter_buttons}
                 </div>
-                <div class="search-box">
-                    <input type="text" placeholder="Search activities...">
+                <div class="input-group">
+                    <input type="text" class="form-control form-control-sm" placeholder="Search activities..." aria-label="Search" aria-describedby="search-addon">
+                    <button class="btn btn-outline-secondary btn-sm" type="button" id="search-addon">
+                        <i class="bi bi-search"></i>
+                    </button>
                 </div>
             </div>
             <div class="feed-stats">
@@ -30,12 +33,12 @@ class ActivityFeedWidget:
             </div>
         </div>
         <div class="feed-timeline">
-            <div class="timeline-items" id="timeline-{id}">
+            <ul class="list-group list-group-flush" id="timeline-{id}">
                 {activity_items}
-            </div>
+            </ul>
         </div>
         <div class="feed-footer">
-            <button class="btn btn-sm btn-primary load-more">Load More</button>
+            <button class="btn btn-primary btn-sm load-more">Load More</button>
         </div>
     </div>
     """

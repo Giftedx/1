@@ -94,24 +94,6 @@ class StreamingSelfBot(commands.Bot):
 
         await self.process_commands(message)
 
-    async def process_commands(self, message: discord.Message) -> None:
-        if message.author.bot:
-            return
-
-        if message.content.startswith("!play"):
-            parts = message.content.split(maxsplit=1)
-            if len(parts) != 2:
-                await message.channel.send("Usage: !play <media_url_or_path>")
-                return
-            media = parts[1]
-            # Use the author's voice channel if they are in one, otherwise error
-            if message.author.voice and message.author.voice.channel:
-                channel = message.author.voice.channel
-            else:
-                await message.channel.send("You must be in a voice channel to use this command.")
-                return
-            await initiate_voice_playback(channel, media)
-
 # Enhanced voice playback using robust session management and error handling.
 async def initiate_voice_playback(channel: discord.VoiceChannel, media: str):
     vc = None
@@ -148,9 +130,3 @@ async def initiate_voice_playback(channel: discord.VoiceChannel, media: str):
         METRICS.decrement_active_streams()  # Decrement active streams
         if vc and vc.is_connected():
             await vc.disconnect()
-
-if __name__ == "__main__":
-    from src.utils.config import Config
-    config = Config()
-    bot = StreamingSelfBot(config)
-    asyncio.run(bot.start(os.getenv("DISCORD_SELFBOT_TOKEN")))

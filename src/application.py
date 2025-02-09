@@ -14,7 +14,6 @@ class Application:
         self._startup_complete = asyncio.Event()
         self._shutdown_event = asyncio.Event()
         self._setup_metrics()
-        # self._setup_container() # removed because it was causing an error
 
     def _setup_metrics(self) -> None:
         """Initialize Prometheus metrics."""
@@ -45,18 +44,6 @@ class Application:
         finally:
             duration = time.time() - start_time
             self._response_times.labels(operation=operation_name).observe(duration)
-
-    # @asynccontextmanager # removed because it was causing an error
-    # async def _init_service(self, name: str) -> None:
-    #     """Initialize a service with proper resource management."""
-    #     try:
-    #         async with self._resource_manager.resource_context(name):
-    #             with self._resource_metrics.labels(type=name, operation='init').time():
-    #                 await self._services[name].start()
-    #                 yield
-    #     except Exception as e:
-    #         await self._handle_service_error(name, e)
-    #         raise
 
 async def my_async_function():
     """Example async function using the time_operation context manager."""

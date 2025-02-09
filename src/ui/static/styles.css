@@ -1,0 +1,41 @@
+:root {
+    /* Default theme variables */
+    --primary-color: #4fc3f7;
+    --secondary-color: #f64f59;
+    --background-color: rgba(255, 255, 255, 0.95);
+    --text-color: #2d3748;
+    --accent-color: #c471ed;
+    --blur-effect: 5px;
+    --box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    --transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    --font-heading: "Inter", sans-serif;
+    --font-body: "Roboto", sans-serif;
+    --font-mono: "Fira Code", monospace;
+}
+
+body {
+    font-family: var(--font-body);
+    background-color: var(--background-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 0;
+    transition: var(--transition);
+}
+
+.dashboard-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-gap: 20px;
+    padding: 20px;
+}
+
+.widget {
+    background-color: rgba(255, 255, 255, 0.8);
+    border-radius: 8px;
+    box-shadow: var(--box-shadow);
+    padding: 20px;
+    transition: var(--transition);
+    backdrop-filter: blur(var(--blur-effect));
+}
+
+/* Add more global styles and widget-specific styles here */

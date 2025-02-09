@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /install
 
-COPY requirements.txt . 
+COPY requirements.txt .
 COPY security/scan_requirements.sh .
 
 # Enhanced build with security checks
@@ -52,8 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && adduser --system --group --no-create-home appuser \
     && mkdir -p /app /app/data /app/logs \
     && chown -R appuser:appuser /app \
-    && chmod -R 755 /app \
-    && apt-get clean
+    && chmod -R 755 /app
 
 WORKDIR /app
 USER appuser
@@ -80,9 +79,9 @@ ENV FFMPEG_THREAD_QUEUE_SIZE=512 \
 ENTRYPOINT ["/usr/bin/tini", "--", "dumb-init"]
 
 # Enhanced healthcheck with media service check
+COPY src/healthcheck.py /app/healthcheck.py
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health && \
-        ffmpeg -v quiet -formats >/dev/null || exit 1
+    CMD python /app/healthcheck.py
 
 CMD ["python", "-m", "src.bot"]
 

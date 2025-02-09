@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <!-- Metadata and CSS links -->
+  </head>
+  <body>
+    <!-- Navigation Bar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+      <a class="navbar-brand" href="#">Dashboard</a>
+      <div class="connection-status">
+        <span class="status-indicator status-healthy"></span>
+        Connected
+      </div>
+      <select class="form-control" id="theme-selector">
+        <option value="default">Default</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </nav>
+
+    <!-- GridStack Layout -->
+    <div class="container-fluid">
+      <div class="grid-stack"></div>
+    </div>
+
+    <!-- Media Controls -->
+    <div class="media-controls">
+      <button id="playPause"><i class="bi bi-play-fill"></i></button>
+      <input type="range" id="seekBar" class="seek-bar" value="0" />
+      <span class="time-display" id="currentTime">00:00</span>/<span class="time-display" id="totalTime">00:00</span>
+      <input type="range" id="volume" value="100" />
+      <button id="mute"><i class="bi bi-volume-up-fill"></i></button>
+    </div>
+
+    <!-- JavaScript Includes -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gridstack@6.1.0/dist/gridstack.all.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>

@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from src.metrics import ACTIVE_STREAMS, STREAM_QUALITY
 from src.core.metrics_manager import MetricsManager
 from src.core.tautulli_client import TautulliClient
+from src.ui.widgets import ActivityFeedWidget
 
 logger = logging.getLogger(__name__)
 app = FastAPI()
@@ -75,10 +76,18 @@ async def dashboard(request: Request):
     try:
         system_stats = await get_system_stats()
         streams_info = await get_streams_info()
+        activity_feed = ActivityFeedWidget()
+        activity_feed_html = activity_feed.template.format(
+            id="activity_feed",
+            filter_buttons="",  # Add filter buttons if needed
+            stats_display="",  # Add stats display if needed
+            activity_items=""   # The activity items will be populated by javascript
+        )
         return templates.TemplateResponse("index.html", {
             "request": request,
             "system_stats": system_stats,
-            "streams_info": streams_info
+            "streams_info": streams_info,
+            "activity_feed": activity_feed_html
         })
     except Exception as e:
         logger.error(f"Error rendering dashboard: {e}", exc_info=True)

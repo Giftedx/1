@@ -43,7 +43,43 @@ The system is designed with a modular architecture, comprising the following key
     pip install -r requirements.txt
     ```
 
-3.  **Testing**
+3.  **Local Development**
+
+    To set up a local development environment, it's recommended to use a virtual environment. This isolates the project dependencies from the system-wide Python packages.
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate  # On Linux/macOS
+    .venv\Scripts\activate  # On Windows
+    pip install -r requirements-dev.txt
+    ```
+
+4.  **Linting**
+
+    Run linting to check code style and potential errors:
+
+    ```bash
+    flake8 src tests
+    ```
+
+5.  **Type Checking**
+
+    Run MyPy to perform static type checking:
+
+    ```bash
+    mypy src tests
+    ```
+
+6.  **Formatting**
+
+    Use Black and isort to format the code:
+
+    ```bash
+    black src tests
+    isort src tests
+    ```
+
+7.  **Testing**
 
     Run tests with:
 
@@ -55,14 +91,30 @@ The system is designed with a modular architecture, comprising the following key
 
 1.  **Docker Build**
 
+    Build the Docker image:
+
     ```bash
     docker build -t media-app .
     ```
 
+    Alternatively, use Docker Compose for building:
+
+    ```bash
+    docker-compose build
+    ```
+
 2.  **Docker Compose**
+
+    Run the application using Docker Compose:
 
     ```bash
     docker-compose up
+    ```
+
+    To run in detached mode:
+
+    ```bash
+    docker-compose up -d
     ```
 
 ## UI Dashboard

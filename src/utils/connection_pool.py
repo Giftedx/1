@@ -1,4 +1,7 @@
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 async def create_connection_pool(host, port, min_connections=1, max_connections=10):
     """
@@ -19,9 +22,10 @@ async def create_connection_pool(host, port, min_connections=1, max_connections=
         """Factory function to create a new connection."""
         try:
             reader, writer = await asyncio.open_connection(host, port)
+            logger.debug(f"Connection established to {host}:{port}")
             return reader, writer
         except Exception as e:
-            print(f"Error creating connection: {e}")
+            logger.error(f"Error creating connection to {host}:{port}: {e}")
             return None, None
 
     async def fill_pool():
@@ -30,6 +34,8 @@ async def create_connection_pool(host, port, min_connections=1, max_connections=
             reader, writer = await connection_factory()
             if reader and writer:
                 await connection_queue.put((reader, writer))
+            else:
+                logger.warning("Failed to create initial connection, pool may be smaller than expected.")
 
     await fill_pool()
     return connection_queue
@@ -44,7 +50,11 @@ async def get_connection(connection_queue):
     Returns:
         tuple: A tuple containing the reader and writer objects.
     """
-    return await connection_queue.get()
+    try:
+        return await connection_queue.get()
+    except Exception as e:
+        logger.error(f"Error getting connection from pool: {e}")
+        return None, None
 
 async def release_connection(connection_queue, reader, writer):
     """
@@ -55,7 +65,12 @@ async def release_connection(connection_queue, reader, writer):
         reader: The reader object.
         writer: The writer object.
     """
-    await connection_queue.put((reader, writer))
+    try:
+        await connection_queue.put((reader, writer))
+        logger.debug("Connection released back to pool.")
+    except Exception as e:
+        logger.error(f"Error releasing connection to pool: {e}")
+        await close_connection(reader, writer)  # Close if release fails
 
 async def close_connection(reader, writer):
     """
@@ -65,8 +80,12 @@ async def close_connection(reader, writer):
         reader: The reader object.
         writer: The writer object.
     """
-    writer.close()
-    await writer.wait_closed()
+    try:
+        writer.close()
+        await writer.wait_closed()
+        logger.debug("Connection closed.")
+    except Exception as e:
+        logger.error(f"Error closing connection: {e}")
 
 # Example usage:
 # connection_pool = await create_connection_pool("localhost", 8080)

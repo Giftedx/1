@@ -4,10 +4,10 @@ import signal
 import sys
 import time
 import uvloop
-from contextlib import asynccontextmanager
-from typing import AsyncIterator, Set, Dict, Any, List, Callable, Awaitable, Type
+from contextlib import asynccontextmanager, suppress
+from typing import AsyncIterator, Set, Dict, Any, List, Callable, Awaitable, Type, Optional
 from collections import defaultdict
-from prometheus_client import start_http_server, Counter, Gauge, Histogram
+from prometheus_client import start_http_server, Counter, Gauge, Histogram, exponential_buckets
 from src.monitoring.alerts import monitor_services
 from src.utils.logging_setup import setup_logging
 from src.utils.config import Config
@@ -15,7 +15,7 @@ from contextlib import AsyncExitStack
 from src.utils.config import settings
 from src.monitoring.circuit_breaker import CircuitBreaker
 from src.monitoring.health import HealthCheck
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.utils.errors import ServiceInitError
 from src.core.container import Container, RedisService, DiscordService, PlexService
 
@@ -23,32 +23,353 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 class GracefulExit(SystemExit):
-    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    pass
 
 async def shutdown(signal: signal.Signals, loop: asyncio.AbstractEventLoop) -> None:
+    """
+    Shuts down the application gracefully.
+
+    This function cancels all pending tasks, logs the cancellation, and stops the event loop.
+
+    Args:
+        signal (signal.Signals): The signal that triggered the shutdown.
+        loop (asyncio.AbstractEventLoop): The event loop to stop.
+    """
     logger.info(f"Received exit signal {signal.name}...")
     tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    
+
     for task in tasks:
         task.cancel()
-    
+
     logger.info(f"Cancelling {len(tasks)} tasks")
     await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     loop.stop()
     raise GracefulExit(signal.name)
+
 async def app_lifespan() -> AsyncIterator[None]:
+    """
+    Manages the application lifespan, starting and cancelling monitoring tasks.
+
+    This function starts a monitoring task to observe the health of services and cancels it upon exit.
+
+    Yields:
+        None: Yields control to the application.
+    """
     config = Config()
     monitor_task = asyncio.create_task(monitor_services(alert_service=config.alert_service))
-    
+
     try:
         yield
     finally:
         monitor_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await monitor_task
-        except asyncio.CancelledError:
-            logger.info("Monitoring task cancelled")
+
+class AdaptiveTimeoutManager:
+    """
+    Manages adaptive timeouts for service operations based on historical performance.
+
+    This class adjusts timeouts dynamically based on the observed latencies of service operations,
+    allowing the system to adapt to varying load and performance conditions.
+    """
+    def __init__(self, min_timeout: float, max_timeout: float, history_size: int = 10):
+        """
+        Initializes the AdaptiveTimeoutManager with minimum and maximum timeout values, and a history size.
+
+        Args:
+            min_timeout (float): The minimum allowed timeout value.
+            max_timeout (float): The maximum allowed timeout value.
+            history_size (int): The number of historical latency values to consider when adjusting the timeout.
+        """
+        self._min_timeout = min_timeout
+        self._max_timeout = max_timeout
+        self._history_size = history_size
+        self._operation_history: Dict[str, List[float]] = defaultdict(list)
+
+    def record_latency(self, operation_name: str, latency: float) -> None:
+        """
+        Records the latency of a service operation.
+
+        Args:
+            operation_name (str): The name of the operation.
+            latency (float): The observed latency of the operation.
+        """
+        history = self._operation_history[operation_name]
+        history.append(latency)
+        if len(history) > self._history_size:
+            history.pop(0)
+
+    def get_timeout(self, operation_name: str) -> float:
+        """
+        Calculates and returns the adaptive timeout value for a service operation.
+
+        The timeout is calculated based on the historical latencies of the operation, with safeguards
+        to ensure it remains within the predefined minimum and maximum bounds.
+
+        Args:
+            operation_name (str): The name of the operation.
+
+        Returns:
+            float: The adaptive timeout value for the operation.
+        """
+        history = self._operation_history[operation_name]
+        if not history:
+            return self._min_timeout  # Default timeout if no history
+
+        average_latency = sum(history) / len(history)
+        # Adjust timeout based on average latency, with a safety margin
+        timeout = min(max(average_latency * 2, self._min_timeout), self._max_timeout)
+        return timeout
+
+class ResourcePool:
+    """
+    Manages a pool of resources, limiting the number of active and idle resources.
+
+    This class is designed to efficiently manage resources by maintaining a pool of reusable instances,
+    reducing the overhead of creating and destroying resources frequently.
+    """
+    def __init__(self, max_size: int, max_idle: int, cleanup_interval: int = 60):
+        """
+        Initializes the ResourcePool with maximum sizes and a cleanup interval.
+
+        Args:
+            max_size (int): The maximum number of resources that can be active at any time.
+            max_idle (int): The maximum number of idle resources to keep in the pool.
+            cleanup_interval (int): The interval (in seconds) at which to run the cleanup task.
+        """
+        self._max_size = max_size
+        self._max_idle = max_idle
+        self._pool: asyncio.Queue[Any] = asyncio.Queue(maxsize=max_size)
+        self._active_count = 0
+        self._cleanup_interval = cleanup_interval
+        self._cleanup_task: Optional[asyncio.Task[None]] = None
+
+    async def start(self) -> None:
+        """Starts the resource pool's cleanup task."""
+        self._cleanup_task = asyncio.create_task(self._cleanup_idle_resources())
+
+    async def stop(self) -> None:
+        """Stops the resource pool's cleanup task and clears the pool."""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._cleanup_task
+        while not self._pool.empty():
+            await self._pool.get()
+
+    async def acquire(self) -> Any:
+        """
+        Acquires a resource from the pool, creating a new one if necessary.
+
+        Returns:
+            Any: A resource from the pool.
+
+        Raises:
+            Exception: If the maximum number of active resources has been reached.
+        """
+        if self._active_count >= self._max_size:
+            raise Exception("Maximum number of active resources reached")
+
+        if not self._pool.empty():
+            resource = await self._pool.get()
+            self._active_count += 1
+            return resource
+        else:
+            self._active_count += 1
+            return await self._create_resource()
+
+    async def release(self, resource: Any) -> None:
+        """
+        Releases a resource back into the pool, or destroys it if the pool is full.
+
+        Args:
+            resource (Any): The resource to release.
+        """
+        if self._pool.qsize() < self._max_idle:
+            await self._pool.put(resource)
+        else:
+            await self._destroy_resource(resource)
+        self._active_count -= 1
+
+    async def _create_resource(self) -> Any:
+        """
+        Abstract method to create a new resource. Must be implemented by subclasses.
+
+        Raises:
+            NotImplementedError: If the method is not implemented by a subclass.
+        """
+        raise NotImplementedError
+
+    async def _destroy_resource(self, resource: Any) -> None:
+        """
+        Abstract method to destroy a resource. Must be implemented by subclasses.
+
+        Args:
+            resource (Any): The resource to destroy.
+
+        Raises:
+            NotImplementedError: If the method is not implemented by a subclass.
+        """
+        raise NotImplementedError
+
+    async def _cleanup_idle_resources(self) -> None:
+        """Periodically cleans up idle resources in the pool."""
+        while True:
+            await asyncio.sleep(self._cleanup_interval)
+            while self._pool.qsize() > self._max_idle:
+                resource = await self._pool.get()
+                await self._destroy_resource(resource)
+
+class ResourceManager:
+    """
+    Manages the lifecycle of services, including acquisition, cleanup, and error handling.
+
+    This class provides a centralized mechanism for managing services, ensuring they are properly
+    initialized, cleaned up, and that errors are handled gracefully.
+    """
+    def __init__(self, cleanup_batch_size: int = 10, max_concurrent_cleanups: int = 5):
+        """
+        Initializes the ResourceManager with batch sizes and concurrency limits for cleanup operations.
+
+        Args:
+            cleanup_batch_size (int): The number of resources to clean up in each batch.
+            max_concurrent_cleanups (int): The maximum number of concurrent cleanup operations.
+        """
+        self._services: Dict[str, Any] = {}
+        self._cleanup_batch_size = cleanup_batch_size
+        self._max_concurrent_cleanups = max_concurrent_cleanups
+        self._cleanup_semaphore = asyncio.Semaphore(max_concurrent_cleanups)
+        self._resource_metrics = Histogram(
+            'resource_usage',
+            'Resource usage metrics',
+            ['type', 'operation'],
+            buckets=exponential_buckets(0.001, 2, 15)
+        )
+        self._cleanup_latency = Histogram(
+            'cleanup_latency',
+            'Resource cleanup latency',
+            ['resource_type'],
+            buckets=exponential_buckets(0.01, 2, 10)
+        )
+
+    async def acquire_service(self, name: str, timeout: float) -> Any:
+        """
+        Acquires a service, initializing it if necessary.
+
+        Args:
+            name (str): The name of the service to acquire.
+            timeout (float): The timeout for the service initialization.
+
+        Returns:
+            Any: The initialized service.
+        """
+        if name not in self._services:
+            self._services[name] = await self._initialize_service(name, timeout)
+        return self._services[name]
+
+    async def _initialize_service(self, name: str, timeout: float) -> Any:
+        """
+        Initializes a service, handling potential errors and timeouts.
+
+        Args:
+            name (str): The name of the service to initialize.
+            timeout (float): The timeout for the service initialization.
+
+        Returns:
+            Any: The initialized service.
+
+        Raises:
+            ServiceInitError: If the service fails to initialize within the given timeout.
+        """
+        try:
+            with asyncio.timeout(timeout):
+                # Assuming Container().get_service returns an awaitable
+                service = await Container().get_service(name)
+                return service
+        except asyncio.TimeoutError:
+            logger.error(f"Service {name} initialization timed out")
+            raise ServiceInitError(f"Service {name} initialization timed out")
+        except Exception as e:
+            logger.error(f"Failed to initialize service {name}: {e}")
+            raise ServiceInitError(f"Failed to initialize service {name}: {e}")
+
+    @asynccontextmanager
+    async def cleanup_context(self, name: str):
+        """
+        Provides a context for cleaning up a service, ensuring proper error handling and metrics.
+
+        Args:
+            name (str): The name of the service to clean up.
+
+        Yields:
+            None: Yields control to the context.
+        """
+        try:
+            yield
+        except Exception as e:
+            logger.error(f"Error during cleanup of {name}: {e}")
+        finally:
+            with self._cleanup_latency.labels(resource_type=name).time():
+                await self._cleanup_service(name)
+
+    async def _cleanup_service(self, name: str) -> None:
+        """
+        Cleans up a service, handling potential errors during the cleanup process.
+
+        Args:
+            name (str): The name of the service to clean up.
+        """
+        try:
+            service = self._services.pop(name, None)
+            if service and hasattr(service, 'cleanup') and callable(service.cleanup):
+                async with self._cleanup_semaphore:
+                    await service.cleanup()
+        except Exception as e:
+            logger.error(f"Failed to cleanup service {name}: {e}")
+
+class PerformanceMetrics:
+    """
+    Collects and manages performance metrics for various operations.
+
+    This class provides a convenient way to track the performance of different operations by
+    recording their execution times and providing histograms for analysis.
+    """
+    def __init__(self, buckets: List[float] = None):
+        """
+        Initializes the PerformanceMetrics with a list of histogram buckets.
+
+        Args:
+            buckets (List[float]): A list of bucket boundaries for the histograms.
+        """
+        if buckets is None:
+            buckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]  # Default buckets
+        self._buckets = buckets
+        self._operation_times: Dict[str, Histogram] = {}
+
+    @contextmanager
+    async def track_operation(self, operation_name: str):
+        """
+        Tracks the execution time of an operation using a context manager.
+
+        Args:
+            operation_name (str): The name of the operation to track.
+
+        Yields:
+            None: Yields control to the context.
+        """
+        start_time = time.time()
+        try:
+            yield
+        finally:
+            elapsed_time = time.time() - start_time
+            if operation_name not in self._operation_times:
+                self._operation_times[operation_name] = Histogram(
+                    f'{operation_name}_duration_seconds',
+                    f'Duration of {operation_name} operation',
+                    buckets=self._buckets
+                )
+            self._operation_times[operation_name].observe(elapsed_time)
 
 class Application:
     def __init__(self):

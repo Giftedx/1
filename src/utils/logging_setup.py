@@ -59,14 +59,18 @@ def log_performance(logger: logging.Logger) -> Callable:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             start_time = time.perf_counter()
+            extra = {'function': func.__name__}
             try:
                 result = await func(*args, **kwargs)
                 duration = time.perf_counter() - start_time
-                logger.info(f"{func.__name__} completed", extra={'duration': duration, 'function': func.__name__})
+                extra['duration'] = duration
+                logger.info(f"{func.__name__} completed", extra=extra)
                 return result
             except Exception as e:
                 duration = time.perf_counter() - start_time
-                logger.error(f"{func.__name__} failed", extra={'duration': duration, 'function': func.__name__, 'error': str(e)})
+                extra['duration'] = duration
+                extra['error'] = str(e)
+                logger.exception(f"{func.__name__} failed", extra=extra)
                 raise
         return wrapper
     return decorator

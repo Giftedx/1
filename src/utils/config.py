@@ -1,7 +1,7 @@
 import os
 from enum import Enum
 from typing import Dict, Optional
-from pydantic import BaseSettings, AnyUrl, validator, Field
+from pydantic import BaseSettings, AnyUrl, validator, Field, root_validator
 
 class QualityPreset(str, Enum):
     LOW = "low"
@@ -72,11 +72,16 @@ class Settings(BaseSettings):
             raise ValueError(f"Invalid FFmpeg preset. Choose from: {list(FFmpegPreset.__members__.keys())}")
         return v
 
-    @validator('SERVICE_MODE')
-    def validate_service_mode(cls, v, values):
-        if v == ServiceMode.SELFBOT and not values.get('STREAMING_BOT_TOKEN'):
-            raise ValueError("STREAMING_BOT_TOKEN required for selfbot mode")
-        return v
+    @root_validator
+    def validate_selfbot_token(cls, values):
+        service_mode = values.get('SERVICE_MODE')
+        streaming_bot_token = values.get('STREAMING_BOT_TOKEN')
+
+        if service_mode == ServiceMode.SELFBOT and not streaming_bot_token:
+            raise ValueError("STREAMING_BOT_TOKEN must be set when SERVICE_MODE is selfbot")
+        elif service_mode != ServiceMode.SELFBOT and streaming_bot_token:
+            print("Warning: STREAMING_BOT_TOKEN is set but SERVICE_MODE is not selfbot. This token will be ignored.")
+        return values
 
     class Config:
         env_file = ".env"

@@ -4,6 +4,12 @@
     "@typescript-eslint/parser": "^8.23.0",
     "eslint": "^9.19.0",
     "playwright": "^1.50.1",
-    "prettier": "^3.4.2"
+    "prettier": "^3.4.2",
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "lint": "eslint . --ext .ts,.js"
   }
 }

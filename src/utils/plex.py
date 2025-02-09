@@ -1,5 +1,6 @@
 import aiohttp
 import logging
+import asyncio
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -13,31 +14,36 @@ class PlexClient:
         self._session = None
         self._request_semaphore = asyncio.Semaphore(10)
 
+    async def _get_session(self):
+        if not self._session or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
     async def get_media_url(self, title: str) -> str:
         cache_key = f"media_url:{title}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         async with self._request_semaphore:
+            session = await self._get_session()
             try:
-                if not self._session:
-                    self._session = aiohttp.ClientSession()
-                
                 headers = {
                     'X-Plex-Token': self.token,
                     'Accept': 'application/json'
                 }
                 
-                async with self._session.get(
+                async with session.get(
                     f"{self.base_url}/library/sections/all/search",
                     params={'query': title},
-                    headers=headers
+                    headers=headers,
+                    timeout=10  # Add a timeout
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
                     
                 results = data.get('MediaContainer', {}).get('Metadata', [])
                 if not results:
+                    self._cache[cache_key] = None  # Cache the None result
                     return None
                     
                 media_key = results[0]['key']
@@ -45,6 +51,13 @@ class PlexClient:
                 self._cache[cache_key] = url
                 return url
                 
-            except Exception as e:
+            except aiohttp.ClientError as e:
                 logger.error(f"Plex API error: {e}", exc_info=True)
                 return None
+            except Exception as e:
+                logger.exception(f"Unexpected error in Plex API call: {e}")
+                return None
+
+    async def close(self):
+        if self._session:
+            await self._session.close()
