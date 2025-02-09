@@ -3,8 +3,9 @@ from typing import Optional
 class MediaBotError(Exception):
     """Base exception for all bot errors."""
     def __init__(self, message: str, code: Optional[str] = None):
-        super().__init__(message)
-        self.code = code or "GENERIC_ERROR"
+        self.message = message
+        self.code = code
+        super().__init__(self.message)
 
 class QueueError(MediaBotError):
     """Base class for queue-related errors."""
@@ -19,31 +20,26 @@ class QueueEmptyError(QueueError):
         super().__init__(message, "QUEUE_EMPTY")
 
 class StreamingError(MediaBotError):
-    """Raised for streaming-related errors."""
-    pass
+    """Raised when there is an error during media streaming."""
+    def __init__(self, message: str, code: Optional[str] = None):
+        super().__init__(message, code)
 
 class CircuitBreakerError(Exception):
-    """Base class for circuit breaker exceptions."""
     pass
 
 class CircuitBreakerOpenError(CircuitBreakerError):
-    """Raised when the circuit breaker is open."""
     pass
 
 class CircuitBreakerHalfOpenError(CircuitBreakerError):
-    """Raised when the circuit breaker is half-open."""
     pass
 
 class InvalidCommandError(MediaBotError):
-    """Raised when an invalid command is issued."""
     pass
 
 class AuthenticationError(MediaBotError):
-    """Raised when there is an authentication error."""
     pass
 
 class PermissionDeniedError(MediaBotError):
-    """Raised when permission is denied."""
     pass
 
 class RateLimitExceededError(Exception):
@@ -53,6 +49,4 @@ class MediaNotFoundError(Exception):
     pass
 
 class ResourceExhaustedError(MediaBotError):
-    """Raised when system resources are exhausted."""
-    def __init__(self, resource: str):
-        super().__init__(f"{resource} resources exhausted", "RESOURCE_EXHAUSTED")
+    pass

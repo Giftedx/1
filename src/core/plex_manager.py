@@ -14,126 +14,79 @@ logger = logging.getLogger(__name__)
 
 class PlexManager:
     def __init__(self, url: Optional[str] = None, token: Optional[str] = None):
-        self.url = url or settings.PLEX_URL
-        self.token = token or settings.PLEX_TOKEN
-        self._server: Optional[PlexServer] = None
+        self._url = url or settings.PLEX_URL
+        self._token = token or settings.PLEX_TOKEN
+        self._server = None
         self._lock = asyncio.Lock()
-        self._connection_retries = 0
-        self._max_retries = 3
-        self._retry_delay = 1.0
-        self._connect()
+        self._session = None
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         reraise=True
     )
-    def _connect(self) -> None:
-        """Connect to the Plex server instance with retries."""
+    async def _connect(self) -> None:
+        """Connects to the Plex server."""
         try:
-            self._server = PlexServer(self.url, self.token)
-            logger.info(f"Connected to Plex server: {self._server.friendlyName}")
-            plex_metrics.server_connection.inc()
-            self._connection_retries = 0
-            self._retry_delay = 1.0
+            self._server = PlexServer(self._url, self._token)
+            logger.info("Connected to Plex server.")
         except Unauthorized:
-            logger.error("Invalid Plex credentials")
-            plex_metrics.connection_errors.inc()
-            raise StreamingError("Invalid Plex credentials")
+            logger.error("Plex authentication failed.")
+            raise
         except Exception as e:
-            self._connection_retries += 1
-            self._retry_delay = min(30, self._retry_delay * 2)
-            logger.error(f"Failed to connect to Plex server: {e}")
-            plex_metrics.connection_errors.inc()
-            raise StreamingError(f"Plex connection failed: {str(e)}")
+            logger.error(f"Failed to connect to Plex: {e}")
+            raise
 
     @property
     async def server(self) -> PlexServer:
-        """Get Plex server instance with auto-reconnect and thread safety."""
-        async with self._lock:
-            if not self._server:
-                self._connect()
-            return self._server
+        """Returns the Plex server instance, reconnecting if necessary."""
+        if not self._server:
+            async with self._lock:
+                if not self._server:
+                    await self._connect()
+        return self._server
 
     @PLEX_REQUEST_DURATION.time()
     @lru_cache(maxsize=100)
-    async def search_media(self, query: str, media_type: Optional[str] = None) -> List[Video]:
-        """Search for media with caching, metrics, and improved error handling."""
+    async def search_media(self, title: str) -> List[Video]:
+        """Searches for media items in the Plex library."""
         try:
-            server = await self.server
-            filters = {"mediatype": media_type} if media_type else {}
-
-            results = await asyncio.to_thread(
-                server.library.search,
-                query,
-                **filters
-            )
-            
-            if not results:
-                plex_metrics.search_misses.inc()
-                raise MediaNotFoundError(f"No media found for query: {query}")
-            
-            videos = [r for r in results if isinstance(r, Video)]
-            if not videos:
-                plex_metrics.search_misses.inc()
-                raise MediaNotFoundError(f"No video content found for query: {query}")
-            
-            plex_metrics.search_hits.inc()
-            return videos
-
+            plex_server = await self.server
+            media = plex_server.search(title)
+            if not media:
+                raise MediaNotFoundError(f"Media '{title}' not found in Plex.")
+            return media
         except NotFound:
-            plex_metrics.search_misses.inc()
-            raise MediaNotFoundError(f"No media found for query: {query}")
+            raise MediaNotFoundError(f"Media '{title}' not found in Plex.")
         except Exception as e:
-            plex_metrics.search_errors.inc()
             logger.error(f"Plex search failed: {e}", exc_info=True)
-            if "Unauthorized" in str(e):
-                await self._reconnect()
-                raise StreamingError("Session expired, please try again")
-            raise StreamingError(f"Plex search failed: {str(e)}")
+            raise
 
     @PLEX_REQUEST_DURATION.time()
-    async def get_stream_url(self, video: Video) -> str:
-        """Get direct stream URL with proper error handling."""
+    async def get_stream_url(self, media_item: Video) -> str:
+        """Gets the stream URL for a media item."""
         try:
-            stream_url = await asyncio.to_thread(video.getStreamURL)
-            if not stream_url:
-                raise StreamingError("Failed to get stream URL")
-
-            plex_metrics.stream_urls_generated.inc()
-            return stream_url
-
+            plex_server = await self.server
+            stream = media_item.getStream()
+            if not stream:
+                raise StreamingError("No stream found for this media.")
+            return plex_server.url + stream.url + '?X-Plex-Token=' + plex_server._token
         except Exception as e:
-            plex_metrics.stream_errors.inc()
-            logger.error(f"Failed to get stream URL: {e}", exc_info=True)
-            if "Unauthorized" in str(e):
-                await self._reconnect()
-                raise StreamingError("Session expired, please try again")
-            raise StreamingError(f"Stream URL generation failed: {str(e)}")
+            logger.error(f"Could not get stream URL: {e}", exc_info=True)
+            raise StreamingError(f"Could not get stream URL: {e}")
 
     async def _reconnect(self) -> None:
-        """Handle reconnection with exponential backoff."""
-        if self._connection_retries >= self._max_retries:
-            raise StreamingError("Max reconnection attempts reached")
-        
-        await asyncio.sleep(self._retry_delay)
+        """Reconnects to the Plex server."""
         async with self._lock:
             self._server = None
-            await self.server
+            await self._connect()
 
     async def close(self) -> None:
-        """Clean up resources."""
-        if self._server:
-            try:
-                await asyncio.to_thread(self._server.close)
-            except Exception as e:
-                logger.error(f"Error closing Plex connection: {e}")
-            finally:
-                self._server = None
+        """Closes the session."""
+        if self._session:
+            await self._session.close()
+            self._session = None
 
     def invalidate_cache(self) -> None:
-        """Clear the search cache."""
+        """Invalidates the cache."""
         self.search_media.cache_clear()
-
-    async def search_media(self, query: str):
-        raise Exception("Simulated Plex error")

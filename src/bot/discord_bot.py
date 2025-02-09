@@ -14,6 +14,7 @@ from src.core.rate_limiter import RateLimiter
 from src.core.exceptions import MediaNotFoundError, StreamingError
 from src.core.config import Settings
 from plexapi.server import PlexServer  # Import PlexServer
+from src.cogs.media_commands import MediaCommands
 
 logger = logging.getLogger(__name__)
 
@@ -27,112 +28,151 @@ class MediaBot(commands.Bot):
         media_player: MediaPlayer = Provide[Container.media_player],
         queue_manager: QueueManager = Provide[Container.queue_manager],
         rate_limiter: RateLimiter = Provide[Container.rate_limiter],
+        *args,
+        **kwargs
     ):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(command_prefix=settings.BOT_PREFIX, intents=intents)
+        super().__init__(
+            command_prefix=settings.COMMAND_PREFIX,
+            intents=discord.Intents.all(),
+            *args,
+            **kwargs
+        )
         self.settings = settings
-        self.plex = plex_manager
+        self.plex_manager = plex_manager
         self.media_player = media_player
-        self.queue = queue_manager
+        self.queue_manager = queue_manager
         self.rate_limiter = rate_limiter
-        self._error_count = 0
-        self._last_error = None
-        self._reconnect_attempts = 0
-        self._max_reconnect_attempts = 5
-        self._reconnect_delay = 5
+        self.voice_client = None  # Track the bot's voice client
 
     async def setup_hook(self):
-        await self.load_extension("src.bot.commands")
-        await self.load_extension("src.bot.events")
+        # Perform any asynchronous setup here
+        logger.info("Setting up the bot...")
+        await self.add_cog(MediaCommands(self))
 
     async def on_ready(self):
-        logger.info(f"Bot ready: {self.user}")
-        await self.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.watching, name=f"{self.command_prefix}help"
-            )
-        )
+        logger.info(f"Discord Bot logged in as {self.user}")
 
     async def on_command_error(self, ctx, error):
-        self._error_count += 1
-        self._last_error = error
-        DISCORD_COMMANDS.labels(status="error").inc()
-
-        if isinstance(error, commands.CommandInvokeError):
-            original = error.original
-            if isinstance(original, MediaNotFoundError):
-                await ctx.send(
-                    "❌ Could not find the requested media. Please check your search terms."
-                )
-                return
-
-            if isinstance(original, StreamingError):
-                await ctx.send(
-                    "❌ Failed to start media playback. Please try again later."
-                )
-                return
-
-            logger.error(f"Command error: {original}", exc_info=original)
-            await ctx.send("An error occurred. Please try again later.")
-            return
-
-        if isinstance(error, commands.CommandOnCooldown):
-            await ctx.send(
-                f"Please wait {error.retry_after:.1f}s before using this command again."
-            )
-            return
-
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You don't have permission to use this command.")
-            return
-
-        logger.error(f"Command error: {error}", exc_info=error)
-        await ctx.send("An error occurred. Please try again later.")
+        logger.error(f"Command error: {error}", exc_info=True)
+        await ctx.send(f"An error occurred: {error}")
 
     async def handle_voice_state_update(self, member, before, after):
-        if member == self.user:
-            if before.channel and not after.channel:
-                VOICE_CONNECTIONS.dec()
-            elif after.channel and not before.channel:
-                VOICE_CONNECTIONS.inc()
+        # Handle voice state updates (e.g., bot joining/leaving channels)
+        pass
 
     async def ensure_voice_client(self, channel):
-        for attempt in range(self._max_reconnect_attempts):
+        # Ensure the bot is connected to the voice channel
+        if self.voice_client is None or not self.voice_client.is_connected():
             try:
-                return await super().ensure_voice_client(channel)
+                self.voice_client = await channel.connect()
+                VOICE_CONNECTIONS.inc()
+                logger.info(f"Connected to voice channel: {channel.name}")
             except Exception as e:
-                self._reconnect_attempts += 1
-                if attempt == self._max_reconnect_attempts - 1:
-                    raise
-                await asyncio.sleep(self._reconnect_delay * (attempt + 1))
+                logger.error(f"Failed to connect to voice channel: {e}", exc_info=True)
+                raise
 
     def run(self, token: str):
-        async def runner():
-            try:
-                await self.start(token)
-            finally:
-                await self.close()
+        try:
+            super().run(token)
+        except discord.LoginFailure as e:
+            logger.error(f"Discord login failure: {e}", exc_info=True)
+        except Exception as e:
+            logger.critical(f"Bot run failed: {e}", exc_info=True)
 
-        asyncio.run(runner())
 
-
-async def play_media(ctx, *, media: str):
-    # Example usage of Plex:
-    plex_url = os.getenv("PLEX_URL")
-    plex_token = os.getenv("PLEX_TOKEN")
-    if not plex_url or not plex_token:
-        await ctx.send("Plex server not configured.")
-        return
-
-    plex_client = PlexServer(plex_url, plex_token)
-    # Retrieve the media file/URL...
+@inject
+async def play_media(
+    ctx: commands.Context,
+    media: str,
+    plex_manager: PlexManager = Provide[Container.plex_manager],
+    media_player: MediaPlayer = Provide[Container.media_player],
+):
+    """Plays media in a voice channel."""
     try:
-        # ...
-        await ctx.send(f"Playing {media} now...")
-        # Connect to voice / stream via FFmpeg or hand off to another system
-    except MediaNotFoundError:
-        raise
+        # Get the voice channel the user is in
+        voice_channel = ctx.author.voice.channel
+        if not voice_channel:
+            await ctx.send("You must be in a voice channel to use this command.")
+            return
+
+        # Ensure the bot is connected to the voice channel
+        bot = ctx.bot  # Get the bot instance from the context
+        if bot.voice_client is None or not bot.voice_client.is_connected():
+            try:
+                bot.voice_client = await voice_channel.connect()
+                VOICE_CONNECTIONS.inc()
+                logger.info(f"Connected to voice channel: {voice_channel.name}")
+            except Exception as e:
+                logger.error(f"Failed to connect to voice channel: {e}", exc_info=True)
+                await ctx.send(f"Failed to connect to voice channel: {e}")
+                return
+
+        # Search for the media using PlexManager
+        try:
+            media_items = await plex_manager.search_media(media)
+            if not media_items:
+                await ctx.send(f"Media '{media}' not found.")
+                return
+            
+            # If multiple items are found, let the user choose
+            if len(media_items) > 1:
+                # Create an embed to list the media items
+                embed = discord.Embed(title="Multiple Media Found", description="Please select the media you want to play:")
+                for i, item in enumerate(media_items):
+                    embed.add_field(name=f"{i+1}", value=item.title, inline=False)
+                
+                message = await ctx.send(embed=embed)
+                
+                # Add reactions for the user to select the media
+                for i in range(1, len(media_items) + 1):
+                    await message.add_reaction(f"{i}\N{COMBINING ENCLOSING KEYCAP}")
+                
+                def check(reaction, user):
+                    return user == ctx.author and str(reaction.emoji) in [f"{i}\N{COMBINING ENCLOSING KEYCAP}" for i in range(1, len(media_items) + 1)]
+                
+                try:
+                    reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
+                except asyncio.TimeoutError:
+                    await ctx.send("You took too long to respond.")
+                    return
+                else:
+                    selected_index = int(str(reaction.emoji)[0]) - 1
+                    media_item = media_items[selected_index]
+                    await ctx.send(f"You selected: {media_item.title}")
+            else:
+                media_item = media_items[0]
+
+        except MediaNotFoundError:
+            await ctx.send(f"Media '{media}' not found in Plex.")
+            return
+        except Exception as e:
+            logger.error(f"Plex search failed: {e}", exc_info=True)
+            await ctx.send(f"Plex search failed: {e}")
+            return
+
+        # Get the stream URL
+        try:
+            stream_url = await plex_manager.get_stream_url(media_item)
+        except StreamingError as e:
+            logger.error(f"Could not get stream URL: {e}", exc_info=True)
+            await ctx.send(f"Could not get stream URL: {e}")
+            return
+        except Exception as e:
+            logger.error(f"Unexpected error getting stream URL: {e}", exc_info=True)
+            await ctx.send(f"Unexpected error getting stream URL: {e}")
+            return
+
+        # Play the media using MediaPlayer
+        try:
+            await media_player.play(stream_url, bot.voice_client)
+            await ctx.send(f"Now playing: {media_item.title}")
+        except StreamingError as e:
+            logger.error(f"Streaming failed: {e}", exc_info=True)
+            await ctx.send(f"Streaming failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected streaming error: {e}", exc_info=True)
+            await ctx.send(f"Unexpected streaming error: {e}")
+
     except Exception as e:
-        logger.error(f"Playback error: {e}", exc_info=True)
-        raise StreamingError(str(e))
+        logger.error(f"Error in play_media function: {e}", exc_info=True)
+        await ctx.send(f"An error occurred: {e}")
