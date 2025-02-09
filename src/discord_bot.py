@@ -47,7 +47,8 @@ class MediaBot(commands.Bot):
                 return
             await ctx.send(f"Playing {media_info[0].title}...")
         except Exception as e:
-            await self.handle_command_error(ctx, e)
+            logger.error(f"Error in play command: {e}", exc_info=True)
+            await ctx.send("An error occurred.")
 
 # Initialize logging, add production logging level setup here
 logging.basicConfig(level=logging.INFO)
