@@ -3,7 +3,7 @@ from typing import Pattern, Optional
 from pathlib import Path
 
 class SecurityValidator:
-    SAFE_PATH_PATTERN: Pattern = re.compile(r'^[\w\-./]+$')
+    SAFE_PATH_PATTERN: Pattern = re.compile(r'^[a-zA-Z0-9\-_./]+$')
     MAX_PATH_LENGTH: int = 255
     
     @classmethod

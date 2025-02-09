@@ -6,11 +6,8 @@ import numpy as np
 
 @dataclass
 class ActivityPoint:
-    timestamp: datetime
-    user_id: str
-    action: str
-    value: float
-    coordinates: tuple[float, float] = None
+    timestamp: float
+    coordinates: tuple[float, float] = (0.0, 0.0)  # Provide a default tuple
 
 class ActivityHeatmapWidget(BaseWidget):
     VERTEX_SHADER = """

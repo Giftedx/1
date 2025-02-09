@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from ..core.user_preferences import PreferencesManager, UserPreferences
 from ..ui.themes import ThemeManager
 import os
@@ -17,6 +17,15 @@ prefs_manager = PreferencesManager(os.getenv('REDIS_URL'))
 notification_center = NotificationCenter()
 settings_manager = SettingsManager()
 logger = logging.getLogger(__name__)
+
+# Example dependency for getting the current user
+async def get_current_user(token: str) -> Optional[str]:  # Replace str with your user model
+    """
+    This is a placeholder. Replace with your actual authentication logic.
+    """
+    if token == "valid_token":
+        return "example_user"  # Replace with your user object
+    return None
 
 @router.get("/api/preferences")
 async def get_preferences(user_id: str = Depends(get_current_user)):
@@ -164,3 +173,21 @@ async def export_settings(categories: List[str]):
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename=settings_export_{datetime.now():%Y%m%d}.json"}
     )
+
+@router.get("/items/{item_id}")
+async def read_item(item_id: int, q: Optional[str] = None, current_user: str = Depends(get_current_user)):
+    """
+    Example route handler.
+    """
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"item_id": item_id, "q": q, "current_user": current_user}
+
+@router.post("/items/")
+async def create_item(name: str, current_user: str = Depends(get_current_user)):
+    """
+    Example route handler.
+    """
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"name": name, "owner": current_user}

@@ -3,7 +3,7 @@ from discord.ext import commands
 import logging
 from src.utils.config import settings
 from src.media.processor import MediaProcessor
-from src.utils.plex import PlexClient
+from src.core.plex_manager import PlexClient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

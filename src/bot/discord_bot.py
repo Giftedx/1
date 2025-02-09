@@ -3,25 +3,36 @@ import asyncio
 from typing import Optional
 import discord
 from discord.ext import commands
+from dependency_injector.wiring import inject, Provide
+from src.core.di_container import Container
 from src.core.plex_manager import PlexManager
 from src.core.media_player import MediaPlayer
 from src.core.queue_manager import QueueManager
 from src.metrics import DISCORD_COMMANDS, VOICE_CONNECTIONS
 from src.core.rate_limiter import RateLimiter
 from src.core.exceptions import MediaNotFoundError, StreamingError
+from src.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
 class MediaBot(commands.Bot):
-    def __init__(self, config, plex_manager: PlexManager, media_player: MediaPlayer):
+    @inject
+    def __init__(
+        self,
+        settings: Settings = Provide[Container.settings],
+        plex_manager: PlexManager = Provide[Container.plex_manager],
+        media_player: MediaPlayer = Provide[Container.media_player],
+        queue_manager: QueueManager = Provide[Container.queue_manager],
+        rate_limiter: RateLimiter = Provide[Container.rate_limiter]
+    ):
         intents = discord.Intents.default()
         intents.message_content = True
-        super().__init__(command_prefix=config.COMMAND_PREFIX, intents=intents)
-        self.config = config
+        super().__init__(command_prefix=settings.BOT_PREFIX, intents=intents)
+        self.settings = settings
         self.plex = plex_manager
         self.media_player = media_player
-        self.queue = QueueManager()
-        self.rate_limiter = RateLimiter()
+        self.queue = queue_manager
+        self.rate_limiter = rate_limiter
         self._error_count = 0
         self._last_error = None
         self._reconnect_attempts = 0

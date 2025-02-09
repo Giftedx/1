@@ -23,6 +23,7 @@ RUN set -ex \
     && ./scan_requirements.sh \
     && apt-get purge -y gcc libc6-dev \
     && apt-get autoremove -y \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Add FFmpeg optimization layer
@@ -32,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libavfilter-extra \
         libavformat-extra \
         libavutil-extra \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Production stage
@@ -50,7 +52,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && adduser --system --group --no-create-home appuser \
     && mkdir -p /app /app/data /app/logs \
     && chown -R appuser:appuser /app \
-    && chmod -R 755 /app
+    && chmod -R 755 /app \
+    && apt-get clean
 
 WORKDIR /app
 USER appuser
@@ -58,11 +61,9 @@ USER appuser
 COPY --chown=appuser:appuser . .
 COPY --from=builder /install /usr/local
 
-# Copy files
+# Copy requirements and install
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . /app/
 
 # Runtime optimizations
 ENV PYTHONUNBUFFERED=1 \
@@ -80,7 +81,7 @@ ENTRYPOINT ["/usr/bin/tini", "--", "dumb-init"]
 
 # Enhanced healthcheck with media service check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9090/health && \
+    CMD curl -f http://localhost:8080/health && \
         ffmpeg -v quiet -formats >/dev/null || exit 1
 
 CMD ["python", "-m", "src.bot"]
@@ -88,26 +89,3 @@ CMD ["python", "-m", "src.bot"]
 # Expose metrics and API ports
 EXPOSE 9090
 EXPOSE 8000
-
-# Additional stage for bot and selfbot
-FROM python:3.11-slim
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONOPTIMIZE=2
-
-WORKDIR /app
-
-# Install dependencies
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY . /app/
-
-# Expose ports for the bot and selfbot
-EXPOSE 8080 9090
-
-# Default command to run the bot
-CMD ["python", "-m", "src.discord_bot"]

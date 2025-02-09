@@ -11,6 +11,7 @@ from src.utils.performance import measure_latency
 from functools import partial
 from typing import Optional, Dict
 from contextlib import AsyncExitStack
+from src.bot.main import MediaStreamingBot  # Import the class
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class MediaCommands(commands.Cog):
     """
     Cog containing media‑related commands.
     """
-    def __init__(self, bot: "MediaStreamingBot"):
+    def __init__(self, bot: MediaStreamingBot):
         self.bot = bot
         self._active_streams: Dict[str, AsyncExitStack] = {}
 

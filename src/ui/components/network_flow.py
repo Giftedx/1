@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class NetworkNode:
     id: str
+    name: str
     type: str
     connections: List[str]
     data_rate: float

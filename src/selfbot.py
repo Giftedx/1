@@ -12,6 +12,9 @@ from src.plex_server import PlexServer
 from src.utils.rate_limiter import RateLimiter
 from src.core.exceptions import MediaNotFoundError
 from src.metrics import ACTIVE_STREAMS, METRICS
+import os
+
+logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +84,62 @@ class StreamingSelfBot(commands.Bot):
     async def on_ready(self):
         logger.info(f"Self‑bot logged in as {self.user}")
 
+    async def on_message(self, message):
+        # Only respond to DM commands to ensure selfbot safety
+        if message.guild is not None: 
+            return
+
+        if message.content.startswith("!play"):
+            parts = message.content.split(maxsplit=1)
+            if len(parts) != 2:
+                await message.channel.send("Usage: !play <media_url_or_path>")
+                return
+            media = parts[1]
+            # Use the VOICE_CHANNEL_ID from env
+            if VOICE_CHANNEL_ID is None:
+                await message.channel.send("VOICE_CHANNEL_ID is not configured correctly.")
+                return
+            channel = self.get_channel(VOICE_CHANNEL_ID)
+            if not channel or not isinstance(channel, discord.VoiceChannel):
+                await message.channel.send("Invalid or misconfigured voice channel.")
+                return
+            await initiate_voice_playback(channel, media)
+
+# Read the voice channel ID from env (ensure this variable is set in .env)
+VOICE_CHANNEL_ID = os.getenv("VOICE_CHANNEL_ID")
+if VOICE_CHANNEL_ID:
+    try:
+        VOICE_CHANNEL_ID = int(VOICE_CHANNEL_ID)
+    except ValueError:
+        logging.error("Invalid VOICE_CHANNEL_ID. Must be an integer.")
+        VOICE_CHANNEL_ID = None  # Set to None if invalid
+else:
+    VOICE_CHANNEL_ID = None
+
+# Enhanced voice playback using robust session management and error handling.
+async def initiate_voice_playback(channel, media: str):
+    vc = None
+    try:
+        vc = await channel.connect()
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-i", media, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        while True:
+            data = await process.stdout.read(4096)
+            if not data:
+                break  # no more data, exit loop
+            await vc.send_audio_packet(data)
+        await process.wait()
+        logging.info("Playback finished.")
+    except Exception as e:
+        logging.exception("Voice playback error")
+    finally:
+        if vc:
+            await vc.disconnect()
+
 if __name__ == "__main__":
-    import os
     from src.utils.config import Config
     config = Config()
     bot = StreamingSelfBot(config)
-    bot.run(os.environ.get("STREAMING_BOT_TOKEN"))
+    asyncio.run(bot.start(os.getenv("DISCORD_SELFBOT_TOKEN")))

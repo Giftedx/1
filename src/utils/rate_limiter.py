@@ -11,21 +11,12 @@ class RateLimiter:
     A Redis‐backed rate limiter for distributed environments.
     Uses a sorted set per user and a sliding window with burst support.
     """
-    def __init__(self, max_requests: int, window_seconds: int, burst_limit: int = None):
+    def __init__(self, max_requests: int, window_seconds: int, burst_limit: int = None, redis_manager: Optional[RedisManager] = None):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.burst_limit = burst_limit or max_requests * 2
-        self.redis_manager: Optional[RedisManager] = None
-        self._lock = asyncio.Lock()
-
-    def set_redis_manager(self, redis_manager: RedisManager) -> None:
         self.redis_manager = redis_manager
-
-    async def initialize(self) -> None:
-        if not self.redis_manager:
-            async with self._lock:
-                self.redis_manager = await RedisManager.create()
-                logger.info("RedisManager initialized for RateLimiter.")
+        self._lock = asyncio.Lock()
 
     async def is_rate_limited(self, user_id: str) -> bool:
         try:
@@ -35,7 +26,10 @@ class RateLimiter:
             return False  # Fail open in case of errors
 
     async def _check_rate_limit(self, user_id: str) -> bool:
-        await self.initialize()
+        if not self.redis_manager:
+            logger.error("RedisManager not initialized for RateLimiter.")
+            return False
+
         key = f"rl:{user_id}"
         now = int(time.time())
         try:
@@ -52,10 +46,14 @@ class RateLimiter:
             raise
 
     async def reset_rate_limit(self, user_id: str) -> None:
-        await self.initialize()
+        if not self.redis_manager:
+            logger.error("RedisManager not initialized for RateLimiter.")
+            return
+
         key = f"rl:{user_id}"
         try:
             await self.redis_manager.redis.delete(key)
             logger.info(f"Rate limit reset for user {user_id}.")
         except Exception as e:
             logger.error(f"Error resetting rate limit for user {user_id}: {e}", exc_info=True)
+            raise

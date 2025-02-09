@@ -30,6 +30,8 @@ class MetricsCollector:
             ['error_type']
         )
 
+METRICS = MetricsCollector()  # Instantiate the MetricsCollector
+
 def track_latency(endpoint: str):
     def decorator(func):
         @functools.wraps(func)

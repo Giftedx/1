@@ -121,7 +121,8 @@ class GracefulShutdown:
         logger.info("Shutdown completed",
                     extra={"duration": duration,
                            "completed_phases": [p for p in context["completed_phases"]],
-                           "error_count": len(context["errors"])})
+                           "error_count": len(context["errors"])}
+        )
         # ...existing metrics update and final cleanup...
 
 # At the end of the file, update the main startup/shutdown handling.
