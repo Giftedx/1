@@ -80,7 +80,7 @@ class GracefulShutdown:
             "CANCEL_TASKS": 10.0,
             "CLEANUP_RESOURCES": 10.0
         }
-        self._circuit_breaker = __import__('src.core.circuit_breaker').core.circuit_breaker.CircuitBreaker(failure_threshold=3, recovery_timeout=60, name="shutdown")
+        self._circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=60, name="shutdown")
         self._context = None
 
     async def shutdown(self, signal_name: str) -> None:

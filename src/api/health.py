@@ -4,7 +4,7 @@ from fastapi import FastAPI, status, Response, APIRouter, HTTPException
 from opentelemetry import trace
 from prometheus_client import Counter, Histogram, Gauge
 from src.core.redis_manager import RedisManager
-from src.plex_server import PlexServer
+from src.core.plex_manager import PlexManager
 from src.core.circuit_breaker import CircuitBreaker
 from asyncio import TimeoutError
 from datetime import datetime
@@ -25,6 +25,30 @@ health_check_failures = Counter('health_check_failures_total', 'Total health che
 service_up = Gauge('service_up', 'Service operational status', ['service'])
 circuit_breaker_state = Gauge('circuit_breaker_state', 'Circuit breaker state', ['service'])
 
+async def check_redis() -> bool:
+    """
+    Placeholder for Redis health check.
+    """
+    try:
+        redis_manager = RedisManager()
+        await redis_manager.ping()
+        return True
+    except Exception as e:
+        logger.error(f"Redis health check failed: {e}")
+        return False
+
+async def check_plex() -> bool:
+    """
+    Placeholder for Plex health check.
+    """
+    try:
+        plex_server = PlexManager()
+        plex_server.ping()
+        return True
+    except Exception as e:
+        logger.error(f"Plex health check failed: {e}")
+        return False
+
 @aiocache.cached(ttl=5)  # Cache health results for 5 seconds
 @router.get("/health", status_code=status.HTTP_200_OK)
 async def health_check(response: Response) -> dict:
@@ -40,8 +64,7 @@ async def health_check(response: Response) -> dict:
             redis_metrics = {}
             try:
                 with tracer.start_span("redis_check"):
-                    # redis_ok = await redis_cb.call(check_redis)
-                    pass
+                    redis_ok = await redis_cb.call(check_redis)
             except TimeoutError:
                 logger.error("Redis health check timed out")
             except Exception as e:
@@ -50,8 +73,7 @@ async def health_check(response: Response) -> dict:
 
             try:
                 with tracer.start_span("plex_check"):
-                    # plex_ok = await plex_cb.call(check_plex)
-                    pass
+                    plex_ok = await plex_cb.call(check_plex)
             except TimeoutError:
                 logger.error("Plex health check timed out")
             except Exception as e:

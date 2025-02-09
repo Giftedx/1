@@ -27,6 +27,11 @@ spec:
             - name: redis-backup
               image: redis:7.0-alpine
               imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ['ALL']
+                readOnlyRootFilesystem: true
               command:
                 - /bin/sh
                 - -c
@@ -131,7 +136,7 @@ spec:
                   curl -s -XPOST http://localhost:9091/metrics/job/redis_backup < /tmp/metrics
 
                   # Add backup validation
-                  if ! redis-cli --pass ${BACKUP_KEY} -h ${REDIS_HOST} PING; then
+                  if ! redis-cli -h ${REDIS_HOST} PING; then
                     echo "Backup validation failed"
                     exit 1
                   fi

@@ -86,6 +86,8 @@ spec:
               cpu: '250m' # Adjusted CPU request
           ports:
             - containerPort: 6379
+            - containerPort: 9121
+              name: metrics
           volumeMounts:
             - mountPath: /data
               name: redis-data

@@ -11,6 +11,7 @@ import logging
 import io
 import json
 from fastapi.responses import StreamingResponse
+from ..core.notifications import notification_center as notification_manager
 
 router = APIRouter()
 prefs_manager = PreferencesManager(os.getenv('REDIS_URL'))

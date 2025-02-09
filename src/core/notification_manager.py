@@ -33,11 +33,15 @@ class NotificationManager:
         ]
 
     async def process_notification(self, notification: 'Notification'):
-        thread = await self._find_or_create_thread(notification)
-        thread.notifications.append(notification)
-        thread.last_update = notification.timestamp
-        await self._update_thread_context(thread)
-        return thread
+        try:
+            thread = await self._find_or_create_thread(notification)
+            thread.notifications.append(notification)
+            thread.last_update = notification.timestamp
+            await self._update_thread_context(thread)
+            return thread
+        except Exception as e:
+            logger.exception(f"Error processing notification: {e}")
+            raise
 
     async def _find_or_create_thread(self, notification: 'Notification') -> NotificationThread:
         thread_id = await self._determine_thread_id(notification)
@@ -64,16 +68,19 @@ class NotificationManager:
         return f"{notification.source}_{notification.type}"
 
     async def _update_thread_context(self, thread: NotificationThread):
-        # Update thread context based on notifications
-        context = {}
-        for notification in thread.notifications[-10:]:  # Look at last 10
-            if notification.type == 'error':
-                context.setdefault('error_count', 0)
-                context['error_count'] += 1
-            elif notification.type == 'success':
-                context['last_success'] = notification.timestamp
+        try:
+            context = {}
+            for notification in thread.notifications[-10:]:  # Look at last 10
+                if notification.type == 'error':
+                    context.setdefault('error_count', 0)
+                    context['error_count'] += 1
+                elif notification.type == 'success':
+                    context['last_success'] = notification.timestamp
 
-        thread.context.update(context)
+            thread.context.update(context)
+        except Exception as e:
+            logger.exception(f"Error updating thread context: {e}")
+            raise
 
     def _generate_thread_title(self, notification: 'Notification') -> str:
         # Generate meaningful thread title based on content
@@ -84,13 +91,17 @@ class NotificationManager:
         return f"Notifications: {notification.source}"
 
     async def cleanup_old_threads(self, max_age_hours: int = 24):
-        now = datetime.utcnow()
-        old_threads = [
-            thread_id for thread_id, thread in self.threads.items()
-            if (now - thread.last_update).total_seconds() > max_age_hours * 3600
-        ]
-        for thread_id in old_threads:
-            await self.archive_thread(thread_id)
+        try:
+            now = datetime.utcnow()
+            old_threads = [
+                thread_id for thread_id, thread in self.threads.items()
+                if (now - thread.last_update).total_seconds() > max_age_hours * 3600
+            ]
+            for thread_id in old_threads:
+                await self.archive_thread(thread_id)
+        except Exception as e:
+            logger.exception(f"Error cleaning up old threads: {e}")
+            raise
 
     async def _group_by_error(self, match, notification):
         return f"error_{match.group(1)}_{notification.source}"
@@ -126,23 +137,26 @@ class NotificationManager:
         return related
 
     async def update_thread_context(self, thread: NotificationThread, notification: Notification):
-        """Update thread context with new notification data"""
-        context = thread.context
-        
-        # Update error tracking
-        if notification.type == 'error':
-            context.error_count += 1
-            if context.error_count >= 3:
-                await self._escalate_thread(thread)
-        
-        # Update success tracking
-        elif notification.type == 'success':
-            context.last_success = notification.timestamp
-            if context.error_count > 0:
-                await self._resolve_thread_errors(thread)
+        try:
+            context = thread.context
+            
+            # Update error tracking
+            if notification.type == 'error':
+                context.error_count += 1
+                if context.error_count >= 3:
+                    await self._escalate_thread(thread)
+            
+            # Update success tracking
+            elif notification.type == 'success':
+                context.last_success = notification.timestamp
+                if context.error_count > 0:
+                    await self._resolve_thread_errors(thread)
 
-        # Dynamic priority adjustment
-        thread.priority = await self._calculate_thread_priority(context)
+            # Dynamic priority adjustment
+            thread.priority = await self._calculate_thread_priority(context)
+        except Exception as e:
+            logger.exception(f"Error updating thread context: {e}")
+            raise
 
     async def _escalate_thread(self, thread: NotificationThread):
         """Handle thread escalation for repeated errors"""

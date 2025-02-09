@@ -103,3 +103,27 @@ groups:
         annotations:
           summary: 'Connection pool near capacity'
           description: 'Redis connection pool usage > 80%'
+      - alert: CPUSaturation
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'High CPU saturation detected'
+          description: 'CPU usage is above 80%.'
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 < 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Low disk space detected'
+          description: 'Disk space is below 20%.'
+      - alert: NetworkErrors
+        expr: sum(rate(node_network_receive_errs_total[5m])) + sum(rate(node_network_transmit_errs_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Network errors detected'
+          description: 'Network interface is experiencing errors.'

@@ -52,6 +52,12 @@ class FFmpegManager:
         self._adaptive_quality = True
         self._quality_monitor = asyncio.create_task(self._monitor_stream_quality())
         self._stream_stats = TTLCache(maxsize=100, ttl=300)
+        self._bitrate_controller = PIDController(
+            Kp=1.0,
+            Ki=0.1,
+            Kd=0.01,
+            setpoint=bitrate
+        )
 
     def _find_ffmpeg(self) -> str:
         """Locate FFmpeg binary with fallback options."""
@@ -196,6 +202,8 @@ class FFmpegManager:
                 stats['memory_total'] += memory
             except psutil.NoSuchProcess:
                 self._active_processes.pop(path, None)
+            except Exception as e:
+                logger.error(f"Error collecting process stats for {path}: {e}")
         return stats
 
     async def _monitor_resources(self) -> None:
@@ -398,10 +406,40 @@ class FFmpegManager:
         tasks = [self.stop_stream(media) for media in list(self._active_processes.keys())]
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Cleaned up all FFmpeg processes.")
+        self._process_monitor.cancel()
+        self._quality_monitor.cancel()
+        try:
+            await self._process_monitor
+            await self._quality_monitor
+        except asyncio.CancelledError:
+            pass
 
     async def _monitor_stream_quality(self):
         while not self._shutdown_event.is_set():
-            for path, stats in self._stream_stats.items():
-                if stats['errors'] > 3:
-                    await self._adjust_stream_quality(path)
+            try:
+                for path, stats in self._stream_stats.items():
+                    if stats['errors'] > 3:
+                        await self._adjust_stream_quality(path)
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error monitoring stream quality: {e}")
             await asyncio.sleep(10)
+
+class PIDController:
+    def __init__(self, Kp: float, Ki: float, Kd: float, setpoint: float):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.setpoint = setpoint
+        self.last_error = 0
+        self.integral = 0
+
+    def update(self, process_value: float, dt: float) -> float:
+        error = self.setpoint - process_value
+        self.integral += error * dt
+        derivative = (error - self.last_error) / dt
+        output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+        self.last_error = error
+        return output

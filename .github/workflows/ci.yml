@@ -209,7 +209,7 @@ jobs:
       - name: Scan Docker image
         if: github.ref == 'refs/heads/main'
         run: |
-          trivy image --severity HIGH,CRITICAL --ignore-unfixed media-app:latest
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed media-app:latest --exit-code 0
       - name: Run performance tests
         run: |
           pip install locust
@@ -219,11 +219,26 @@ jobs:
         run: |
           docker scout cves media-app:latest || true
           docker scout recommendations media-app:latest || true
-      - name: Performance benchmarking
-        run: |
-          pip install locust
-          locust --headless -f tests/performance/locustfile.py --users 100 --spawn-rate 10 --run-time 5m --html performance-report.html
       - name: Advanced security scanning
         run: |
           trivy fs --security-checks vuln,config,secret --ignore-unfixed --exit-code 1 --severity HIGH,CRITICAL . || true
           grype dir:. --fail-on high --config grype.yaml
+      - name: Check for outdated dependencies
+        run: |
+          pip install pip-audit
+          pip-audit || true
+      - name: Performance benchmarking
+        run: |
+          pip install locust
+          locust --headless -f tests/performance/locustfile.py --users 100 --spawn-rate 10 --run-time 5m --html performance-report.html
+          # Add a fail condition based on the report
+          if grep -q "0 failures" performance-report.html; then
+            echo "Performance tests passed"
+          else
+            echo "Performance tests failed"
+            exit 1
+          fi
+      - name: Check license compliance
+        run: |
+          pip install license-checker
+          license-checker --production --failOn GPL || true

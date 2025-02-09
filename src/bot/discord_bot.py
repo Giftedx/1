@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os # Import the os module
 from typing import Optional
 import discord
 from discord.ext import commands
@@ -12,6 +13,7 @@ from src.metrics import DISCORD_COMMANDS, VOICE_CONNECTIONS
 from src.core.rate_limiter import RateLimiter
 from src.core.exceptions import MediaNotFoundError, StreamingError
 from src.core.config import Settings
+from plexapi.server import PlexServer # Import PlexServer
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,6 @@ class MediaBot(commands.Bot):
 
         asyncio.run(runner())
 
-@bot.command(name="play")
 async def play_media(ctx, *, media: str):
     # Example usage of Plex:
     plex_url = os.getenv("PLEX_URL")

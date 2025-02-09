@@ -54,6 +54,7 @@ class MediaPlayer:
             except Exception as e:
                 logger.error(f"Failed to start playback: {e}", exc_info=True)
                 stream_metrics.stream_errors.inc()
+                await self.stop() # Ensure cleanup on failure
                 raise StreamingError(f"Failed to start playback: {str(e)}")
 
     async def stop(self) -> None:
@@ -85,6 +86,8 @@ class MediaPlayer:
                     await task
                 except asyncio.CancelledError:
                     pass
+                except Exception as e:
+                    logger.error(f"Error cancelling task: {e}")
 
     async def _monitor_stream(self, 
                             stream_url: str, 
@@ -133,3 +136,4 @@ class MediaPlayer:
         if retries >= config.max_retries:
             logger.error(f"Max retries reached for stream: {stream_url}")
             stream_metrics.stream_errors.inc()
+            await self.stop() # Ensure cleanup after retries
