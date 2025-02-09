@@ -8,6 +8,12 @@
     <div class="container">
         <h1>Error</h1>
         <p>An error occurred: {{ error }}</p>
+        {% if details %}
+        <details>
+            <summary>Details</summary>
+            <pre>{{ details }}</pre>
+        </details>
+        {% endif %}
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
