@@ -6,8 +6,8 @@ from dependency_injector.wiring import inject, provide
 
 from src.config import Config
 from src.services.plex_server import PlexServer
-from src.services.queue_manager import QueueManager
-from src.services.redis_manager import RedisManager
+
+from src.utils.redis_manager import RedisManager
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,11 @@ class BaseDiscordClient(commands.Bot):
     async def _initialize_services(self, 
         redis_manager: RedisManager = provide("redis_manager"),
         plex_server: PlexServer = provide("plex_server"),
-        queue_manager: QueueManager = provide("queue_manager")
+        
     ) -> None:
         self.redis_manager = redis_manager
         self.plex_server = plex_server
-        self.queue_manager = queue_manager
+        
         
     def _setup_error_handlers(self) -> None:
         @self.event

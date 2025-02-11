@@ -2,7 +2,7 @@ import json
 import time
 from typing import Dict, Optional, List, Tuple
 from src.core.redis_manager import RedisManager
-from src.core.redis_transaction import RedisTransaction
+
 from src.core.exceptions import QueueFullError, QueueEmptyError
 from src.monitoring.metrics import track_latency
 from dataclasses import dataclass
@@ -44,7 +44,7 @@ class QueueManager:
             QueuePriority.MEDIUM: f"{self.queue_key}:medium",
             QueuePriority.LOW: f"{self.queue_key}:low"
         } # You might not need this if not using Redis
-        self.transaction_manager = RedisTransaction(redis_manager) # You might not need this if not using Redis
+         # You might not need this if not using Redis
         self._queue_metrics = {
             'enqueue_latency': Histogram('queue_enqueue_latency_seconds',
                                        'Time taken to enqueue items'),

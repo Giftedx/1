@@ -9,7 +9,7 @@ target-version = ['py39']
 include = '\.pyi?$'
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -18,7 +18,7 @@ check_untyped_defs = true
 [tool.flake8]
 max-line-length = 120
 exclude = ['.venv', '.git', '__pycache__', 'docs', 'build', 'dist']
-extend-ignore = E203, W503
+extend-ignore = ["E203", "W503"] # Corrected line 21
 
 [tool.coverage.run]
 branch = true

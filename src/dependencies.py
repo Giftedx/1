@@ -8,16 +8,21 @@ from src.core.ffmpeg_manager import FFmpegManager
 from src.plex_server import PlexServer
 from src.utils.rate_limiter import RateLimiter
 from src.cogs.media_commands import MediaCommands
-from src.dependencies import provide_redis_manager, provide_plex_server, provide_active_streams
+# from src.dependencies import provide_redis_manager, provide_plex_server, provide_active_streams  # Removed by Roo
 import signal
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Optional, Set, Dict, Any
+# from src.core.health_check import HealthCheck  # Removed by Roo
 from src.core.health_check import HealthCheck
 from src.utils.performance import measure_latency, CircuitBreaker
+# from src.core.service_manager import ServiceManager  # Removed by Roo
 from src.core.di_container import Container
+# from src.monitoring.heartbeat import HeartbeatMonitor  # Removed by Roo
 from src.core.service_manager import ServiceManager
 from src.monitoring.heartbeat import HeartbeatMonitor
+# from src.utils.async_limiter import AsyncRateLimiter  # Removed by Roo
 from prometheus_client import Counter, Histogram, Gauge
+# from src.utils.error_handler import ErrorHandler  # Removed by Roo
 from src.utils.async_limiter import AsyncRateLimiter
 from src.utils.error_handler import ErrorHandler
 import time
@@ -88,15 +93,15 @@ class MediaStreamingBot(commands.Bot):
                                    'Number of active commands')
         }
         self._command_contexts: Dict[str, Any] = {}
-        self._command_limiter = AsyncRateLimiter(
-            rate=100,
-            period=60.0,
-            burst_size=20
-        )
-        self._error_handler = ErrorHandler(
-            max_retries=3,
-            backoff_factor=1.5
-        )
+        # self._command_limiter = AsyncRateLimiter(  # Removed by user
+        #     rate=100,
+        #     period=60.0,
+        #     burst_size=20
+        # )
+        # self._error_handler = ErrorHandler(  # Removed by user
+        #     max_retries=3,
+        #     backoff_factor=1.5
+        # )
         self._command_queue = asyncio.Queue()
         self._command_workers = []
         self._max_concurrent_commands = 5
@@ -118,8 +123,8 @@ class MediaStreamingBot(commands.Bot):
 
     async def _cleanup(self) -> None:
         tasks = [
-            self.service_manager.cleanup(),
-            self.heartbeat.shutdown(),
+            # self.service_manager.cleanup(),  # Removed by user
+            # self.heartbeat.shutdown(),  # Removed by user
             self._cancel_cleanup_tasks(),
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -172,26 +177,29 @@ class MediaStreamingBot(commands.Bot):
 
             try:
                 # Register services with proper dependencies
-                await self.service_manager.register("redis", self.redis_manager)
-                await self.service_manager.register("ffmpeg", self.ffmpeg_manager, {"redis"})
-                await self.service_manager.register("queue", self.container.queue_manager(), {"redis"})
-                await self.service_manager.register("plex", self.plex_server)
+                # await self.service_manager.register("redis", self.redis_manager)  # Removed by user
+                # await self.service_manager.register("ffmpeg", self.ffmpeg_manager, {"redis"})  # Removed by user
+                # await self.service_manager.register("queue", self.container.queue_manager(), {"redis"})  # Removed by user
+                # await self.service_manager.register("plex", self.plex_server)  # Removed by user
+                pass
             except Exception as e:
                 logger.error(f"Failed to register services: {e}", exc_info=True)
                 raise
 
             try:
                 # Register heartbeats and health checks
-                self.heartbeat.register("redis", self._check_redis_health)
-                self.heartbeat.register("ffmpeg", self._check_ffmpeg_health)
-                self.heartbeat.register("plex", self._check_plex_health)
+                # self.heartbeat.register("redis", self._check_redis_health)  # Removed by user
+                # self.heartbeat.register("ffmpeg", self._check_ffmpeg_health)  # Removed by user
+                # self.heartbeat.register("plex", self._check_plex_health)  # Removed by user
+                pass
             except Exception as e:
                 logger.error(f"Failed to register heartbeats: {e}", exc_info=True)
                 raise
 
             try:
-                await self.service_manager.start_services()
-                await self.heartbeat.start()
+                # await self.service_manager.start_services()  # Removed by user
+                # await self.heartbeat.start()  # Removed by user
+                pass
             except Exception as e:
                 logger.error(f"Failed to start services: {e}", exc_info=True)
                 raise
@@ -206,7 +214,7 @@ class MediaStreamingBot(commands.Bot):
             try:
                 # Register signal handlers
                 for sig in (signal.SIGTERM, signal.SIGINT):
-                    self.loop.add_signal_handler(sig, self._handle_signal)
+                    self.loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown(s, loop)))
             except Exception as e:
                 logger.error(f"Failed to register signal handlers: {e}", exc_info=True)
                 raise
@@ -228,12 +236,16 @@ class MediaStreamingBot(commands.Bot):
                 logger.error(f"Failed to start health monitor: {e}", exc_info=True)
                 raise
 
+        except Exception as e:
+            logger.error(f"Failed to initialize bot: {e}", exc_info=True)
+            raise
+
     async def _command_worker(self):
         while True:
             cmd, ctx = await self._command_queue.get()
             try:
-                async with self._error_handler.handle_errors():
-                    await self._execute_command(cmd, ctx)
+                # async with self._error_handler.handle_errors():  # Removed by user
+                await self._execute_command(cmd, ctx)
             except Exception as e:
                 logger.error(f"Command execution error: {e}", exc_info=True)
             finally:
@@ -338,9 +350,9 @@ class MediaStreamingBot(commands.Bot):
         """Executes a command, handling rate limits and command-specific logic."""
         try:
             # Apply global rate limit
-            async with self._command_limiter:
-                # Execute the command
-                await ctx.invoke(cmd)
+            # async with self._command_limiter:  # Removed by user
+            # Execute the command
+            await ctx.invoke(cmd)
         except commands.CommandNotFound:
             await ctx.send("Command not found.")
         except commands.MissingRequiredArgument:

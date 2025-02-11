@@ -13,6 +13,12 @@ MEMORY_USAGE = Gauge('memory_usage_bytes', 'Memory usage in bytes')
 CPU_USAGE = Gauge('cpu_usage_percent', 'CPU usage percentage')
 ACTIVE_CONNECTIONS = Gauge('active_connections', 'Number of active connections')
 
+class PlexMetricsCollector:
+    def __init__(self):
+        self.request_duration = Histogram('plex_request_duration_seconds', 'Plex request duration', ['endpoint'])
+
+plex_metrics = PlexMetricsCollector()  # Instantiate the PlexMetricsCollector
+
 class MetricsCollector:
     def __init__(self):
         self.stream_latency = Histogram(

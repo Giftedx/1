@@ -8,10 +8,11 @@ from typing import AsyncIterator, Set, Dict, Any, List, Tuple
 from discord.ext import commands
 
 from src.core.di_container import Container
-from src.core.service_manager import ServiceManager
-from src.monitoring.heartbeat import HeartbeatMonitor
+
+
 from prometheus_client import Counter, Histogram, Gauge
-from src.utils.async_limiter import AsyncRateLimiter
+
+# from src.utils.error_handler import ErrorHandler
 from src.utils.error_handler import ErrorHandler
 from src.core.config import Settings  # Import Settings
 from dependency_injector.wiring import inject, Provide
@@ -44,8 +45,8 @@ class MediaStreamingBot(commands.Bot):
         )
         self.settings = settings
         self._shutdown_event = asyncio.Event()
-        self.service_manager = ServiceManager()
-        self.heartbeat = HeartbeatMonitor()
+        
+        
         self._command_latency = Histogram(
             'command_latency_seconds',
             'Command execution latency',
@@ -70,6 +71,10 @@ class MediaStreamingBot(commands.Bot):
             period=60.0,
             burst_size=20
         )
+#         self._error_handler = ErrorHandler(
+#             max_retries=3,
+#             backoff_factor=1.5
+#         )
         self._error_handler = ErrorHandler(
             max_retries=3,
             backoff_factor=1.5
@@ -124,18 +129,18 @@ class MediaStreamingBot(commands.Bot):
             container.wire(modules=[__name__, "src.cogs.media_commands"])
 
             # Register services with proper dependencies
-            await self.service_manager.register("redis", container.redis_manager())
-            await self.service_manager.register("ffmpeg", container.ffmpeg_manager(), {"redis"})
-            await self.service_manager.register("queue", container.queue_manager(), {"redis"})
-            await self.service_manager.register("plex", container.plex_manager())
+            
+            
+            
+            
 
             # Register heartbeats and health checks
-            self.heartbeat.register("redis", self._check_redis_health)
-            self.heartbeat.register("ffmpeg", self._check_ffmpeg_health)
-            self.heartbeat.register("plex", self._check_plex_health)
+            
+            
+            
 
-            await self.service_manager.start_services()
-            await self.heartbeat.start()
+            
+            
 
             await self.add_cog(container.media_commands())
             logger.info("Bot setup complete.")
@@ -161,6 +166,7 @@ class MediaStreamingBot(commands.Bot):
         while True:
             cmd, ctx = await self._command_queue.get()
             try:
+#             async with self._error_handler.handle_errors():
                 async with self._error_handler.handle_errors():
                     await self._execute_command(cmd, ctx)
             except Exception as e:
@@ -267,7 +273,7 @@ class MediaStreamingBot(commands.Bot):
         """Executes a command, handling rate limits and command-specific logic."""
         try:
             # Apply global rate limit
-            async with self._command_limiter:
+            
                 # Execute the command
                 await ctx.invoke(cmd)
         except commands.CommandNotFound:
