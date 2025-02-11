@@ -1,144 +1,110 @@
-# Media Bot Production-Grade System
+# Welcome to AI Toolkit for VS Code
+AI Toolkit for VS Code brings together various models from Azure AI Studio Catalog and other catalogs like Hugging Face. The toolkit streamlines the common development tasks for building AI apps with generative AI tools and models through:
+- Get started with model discovery and playground.
+- Model fine-tuning and inference using local computing resources.
+- **[Private Preview]** One-click provisioning for Azure Container Apps to run model fine-tuning and inference in the cloud.
 
-## Overview
+Now let's jump into your AI app development:
 
-This project provides:
+- [Local Development](#local-development)
+    - [Preparations](#preparations)
+    - [Activate Conda](#activate-conda)
+    - [Base model fine-tuning only](#base-model-fine-tuning-only)
+    - [Model fine-tuning and inferencing](#model-fine-tuning-and-inferencing)
+- [**[Private Preview]** Remote Development](#remote-development)
+    - [Prerequisites](#prerequisites)
+    - [Provision Azure Resources](#provision-azure-resources)
+    - [Add Huggingface Token to the Azure Container App Secret](#add-huggingface-token-to-the-azure-container-app-secret)
+    - [Run Fine-tuning](#run-fine-tuning)
+    - [Provision Inference Endpoint](#provision-inference-endpoint)
+    - [Deploy the Inference Endpoint](#deploy-the-inference-endpoint)
+    - [Advanced usage](#advanced-usage)
 
--   A Discord Bot for command processing and Plex integration.
--   A Discord Self-bot for handling video media playback in voice channels.
--   A production-grade architecture with robust error handling, scalability, and an elegant UI dashboard.
+## Local Development
+### Preparations
 
-## Architecture
+1. Make sure NVIDIA driver are installed in the host. 
+2. Run `huggingface-cli login`, if you are using HF for dataset ustilization
+3. `Olive` key settings explanations for anything that modifies memory usage. 
 
-The system is designed with a modular architecture, comprising the following key components:
+### (Optional) Setup Conda Environment
+AI Toolkit downloads model and executes setup script when generating this workspace. If that's skipped or you would like to setup again.
 
--   **Discord Bot (`src/bot/discord_bot.py`):** Handles command processing and interacts with the Discord API.
--   **Discord Self-bot (`src/discord_selfbot.py`):** Manages media playback in voice channels using a separate Discord account.
--   **Plex Integration (`src/core/plex_manager.py`, `src/plex_server.py`):** Provides seamless integration with Plex Media Server for media library access and playback control.
--   **FFmpeg Management (`src/core/ffmpeg_manager.py`):** Manages FFmpeg processes for media transcoding and streaming.
--   **Redis-based Queue (`src/core/queue_manager.py`):** Implements a distributed queue for managing media playback requests.
--   **Rate Limiting (`src/core/rate_limiter.py`):** Enforces rate limits to prevent abuse and ensure fair usage.
--   **Metrics and Monitoring (`src/metrics.py`, `src/monitoring/`):** Collects and exposes metrics for monitoring system performance and health.
--   **UI Dashboard (`src/ui/`):** Provides a web-based dashboard for monitoring and managing the system.
--   **API (`src/api/`):** Exposes a REST API for interacting with the system.
+```bash
+./setup/first_time_setup.sh
+```
 
-## Setup
+### Activate Conda
+Since we ware using WSL environment and is shared you need to manually acitvate the conda environment. After this step you can run finetunning or inference.
 
-1.  **Environment Variables**
+```bash
+conda activate [conda-env-name] 
+```
 
-    Create a copy of `.env.example` to `.env` and update the following:
+### Base model fine-tuning only
+To just try the base model without fine-tuning you can run this command after activating conda.
 
-    -   `BOT_TOKEN` or `STREAMING_BOT_TOKEN`: Discord bot token (for bot or selfbot mode).
-    -   `PLEX_URL` and `PLEX_TOKEN`: Plex Media Server URL and token.
-    -   `REDIS_URL`: Redis connection URL.
-    -   `SERVICE_MODE`: Set to either `bot` or `selfbot` to determine which client to run.
-    -   `VOICE_CHANNEL_ID` (for selfbot): Discord voice channel ID for the selfbot.
-    -   Other configuration options as needed (see `.env.example` for details).
+```bash
+cd inference
 
-2.  **Dependencies**
+# Web browser interface allows to adjust a few parameters like max new token length, temperature and so on.
+# User has to manually open the link (e.g. http://127.0.0.1:7860) in a browser after gradio initiates the connections.
+python gradio_chat.py --baseonly
+```
 
-    Install Python dependencies:
+Checkpoints and final model will be saved in `models` folder.
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+Next run inferencing with the fune-tuned model through chats in a `console`, `web browser` or `prompt flow`.
 
-3.  **Local Development**
+```bash
+cd inference
 
-    To set up a local development environment, it's recommended to use a virtual environment. This isolates the project dependencies from the system-wide Python packages.
+# Console interface.
+python console_chat.py
 
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate  # On Linux/macOS
-    .venv\Scripts\activate  # On Windows
-    pip install -r requirements-dev.txt
-    ```
+# Web browser interface allows to adjust a few parameters like max new token length, temperature and so on.
+# User has to manually open the link (e.g. http://127.0.0.1:7860) in a browser after gradio initiates the connections.
+python gradio_chat.py
+```
 
-4.  **Linting**
+To use `prompt flow` in VS Code, please refer to this [Quick Start](https://microsoft.github.io/promptflow/how-to-guides/quick-start.html).
 
-    Run linting to check code style and potential errors:
+## Remote Development
+### Prerequisites
+1. To run the model fine-tuning in your remote Azure Container App Environment, make sure your subscription has enough GPU capacity. Submit a [support ticket](https://azure.microsoft.com/support/create-ticket/) to request the required capacity for your application. [Get More Info about GPU capacity](https://learn.microsoft.com/en-us/azure/container-apps/workload-profiles-overview)
+2. Make sure you have a [HuggingFace account](https://huggingface.co/) and [generate an access token](https://huggingface.co/docs/hub/security-tokens)
+3. Accept the LICENSE of [llama](https://huggingface.co/meta-llama/Meta-Llama-3-8B) on HuggingFace. 
 
-    ```bash
-    flake8 src tests
-    ```
+### Provision Azure Resources
+To get started, you need to provision the Azure Resource for remote fine-tuning. Do this by running the `AI Toolkit: Provision Azure Container Apps job for fine-tuning` from the command palette.
 
-5.  **Type Checking**
+Monitor the progress of the provision through the link displayed in the output channel.
 
-    Run MyPy to perform static type checking:
+### Add Huggingface Token to the Azure Container App Secret
+If you're using Llama, ensure to accept the LICENSE of [llama](https://huggingface.co/meta-llama/Meta-Llama-3-8B) on HuggingFace. 
+Following this, set your HuggingFace token as an environment variable to avoid the need for manual login on the Hugging Face Hub.
+You can do this using the `AI Toolkit: Add Azure Container Apps Job secret for fine-tuning command`. With this command, you can set the secret name as [`HF_TOKEN`](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables#hftoken) and use your Hugging Face token as the secret value.
 
-    ```bash
-    mypy src tests
-    ```
+### Run Fine-tuning
+To start the remote fine-tuning job, execute the `AI Toolkit: Run fine-tuning` command.
 
-6.  **Formatting**
+To view the system and console logs, you can visit the Azure portal using the link in the output panel (more steps at [View and Query Logs on Azure](https://aka.ms/ai-toolkit/remote-provision#view-and-query-logs-on-azure)). Or, you can view the console logs directly in the VSCode output panel by running the command `AI Toolkit: Show the running fine-tuning job streaming logs`. 
+> **Note:** The job might be queued due to insufficient resources. If the log is not displayed, execute the `AI Toolkit: Show the running fine-tuning job streaming logs` command, wait for a while and then execute the command again to re-connect to the streaming log.
 
-    Use Black and isort to format the code:
+During this process, QLoRA will be used for fine-tuning, and will create LoRA adapters for the model to use during inference.
+The results of the fine-tuning will be stored in the Azure Files.
 
-    ```bash
-    black src tests
-    isort src tests
-    ```
+### Provision Inference Endpoint
+After the adapters are trained in the remote environment, use a simple Gradio application to interact with the model.
+Similar to the fine-tuning process, you need to set up the Azure Resources for remote inference by executing the `AI Toolkit: Provision Azure Container Apps for inference` from the command palette. 
+   
+By default, the subscription and the resource group for inference should match those used for fine-tuning. The inference will use the same Azure Container App Environment and access the model and model adapter stored in Azure Files, which were generated during the fine-tuning step. 
 
-7.  **Testing**
 
-    Run tests with:
+### Deploy the Inference Endpoint
+If you wish to revise the inference code or reload the inference model, please execute the `AI Toolkit: Deploy for inference` command. This will synchronize your latest code with Azure Container App and restart the replica.  
 
-    ```bash
-    pytest --maxfail=1 --disable-warnings -q
-    ```
+Once deployment is successfully completed, you can access the inference API by clicking on the "*Go to Inference Endpoint*" button displayed in the VSCode notification. Or, the web API endpoint can be found under `ACA_APP_ENDPOINT` in `./infra/inference.config.json` and in the output panel. You are now ready to evaluate the model using this endpoint.
 
-## Containerization
-
-1.  **Docker Build**
-
-    Build the Docker image:
-
-    ```bash
-    docker build -t media-app .
-    ```
-
-    Alternatively, use Docker Compose for building:
-
-    ```bash
-    docker-compose build
-    ```
-
-2.  **Docker Compose**
-
-    Run the application using Docker Compose:
-
-    ```bash
-    docker-compose up
-    ```
-
-    To run in detached mode:
-
-    ```bash
-    docker-compose up -d
-    ```
-
-## UI Dashboard
-
--   The UI is served from `/ui/index.html` and can be extended as needed.
-
-## Deployment
-
-For production deployment, consider using Kubernetes with this Docker image. Configure resource requests/limits and secret management based on your environment.
-
-## Security
-
--   Ensure that production tokens and secrets are managed securely (e.g., using Vault or Kubernetes Secrets).
--   Regularly run the provided CI/CD pipeline for security audits.
--   Implement input validation and sanitization to prevent security vulnerabilities.
-
-## Contributing
-
-1.  Fork the repository.
-2.  Create a new branch for your feature or bug fix.
-3.  Implement your changes and write tests.
-4.  Run tests to ensure everything is working correctly.
-5.  Submit a pull request.
-
-## License
-
-This project is licensed under the MIT License.
+### Advanced usage
+For more information on remote development with AI Toolkit, refer to the [Fine-Tuning models remotely](https://aka.ms/ai-toolkit/remote-provision) and [Inferencing with the fine-tuned model](https://aka.ms/ai-toolkit/remote-inference) documentation.

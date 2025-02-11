@@ -1,7 +1,5 @@
 import logging
 import asyncio
-import os  # Import the os module
-from typing import Optional
 import discord
 from discord.ext import commands
 from dependency_injector.wiring import inject, Provide
@@ -9,11 +7,10 @@ from src.core.di_container import Container
 from src.core.plex_manager import PlexManager
 from src.core.media_player import MediaPlayer
 from src.core.queue_manager import QueueManager
-from src.metrics import DISCORD_COMMANDS, VOICE_CONNECTIONS
 from src.core.rate_limiter import RateLimiter
 from src.core.exceptions import MediaNotFoundError, StreamingError
 from src.core.config import Settings
-from plexapi.server import PlexServer  # Import PlexServer
+from src.metrics import VOICE_CONNECTIONS
 from src.cogs.media_commands import MediaCommands
 
 logger = logging.getLogger(__name__)
@@ -119,16 +116,17 @@ async def play_media(
                 # Create an embed to list the media items
                 embed = discord.Embed(title="Multiple Media Found", description="Please select the media you want to play:")
                 for i, item in enumerate(media_items):
-                    embed.add_field(name=f"{i+1}", value=item.title, inline=False)
+                    # Add space around '+'
+                    embed.add_field(name=f"{i + 1}", value=item.title, inline=False)
                 
                 message = await ctx.send(embed=embed)
                 
                 # Add reactions for the user to select the media
                 for i in range(1, len(media_items) + 1):
-                    await message.add_reaction(f"{i}\N{COMBINING ENCLOSING KEYCAP}")
+                    await message.add_reaction(f"{i}\u20E3")
                 
                 def check(reaction, user):
-                    return user == ctx.author and str(reaction.emoji) in [f"{i}\N{COMBINING ENCLOSING KEYCAP}" for i in range(1, len(media_items) + 1)]
+                    return user == ctx.author and str(reaction.emoji) in [f"{i}\u20E3" for i in range(1, len(media_items) + 1)]
                 
                 try:
                     reaction, user = await bot.wait_for('reaction_add', timeout=60.0, check=check)
