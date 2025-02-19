@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 from .base_widget import BaseWidget, WidgetConfig
-from ...core.ffmpeg import FFmpegManager
-from ...core.plex import PlexClient
+from ...core.ffmpeg_manager import FFmpegManager
+from ...core.plex_manager import PlexManager as PlexClient
 import asyncio
 
 class MediaQueueWidget(BaseWidget):

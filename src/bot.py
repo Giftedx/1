@@ -1,62 +1,52 @@
 import asyncio
 import logging
-import discord
-from discord.ext import commands
-from src.utils.config import Config
-from src.core.queue_manager import QueueManager
-from src.core.ffmpeg_manager import FFmpegManager
-from src.plex_server import PlexServer
-from src.utils.rate_limiter import RateLimiter
-from src.cogs.media_commands import MediaCommands
-from src.dependencies import provide_redis_manager, provide_plex_server, provide_active_streams
 import signal
-from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional, Set, Dict, Any
-from src.core.health_check import HealthCheck
-from src.utils.performance import measure_latency, CircuitBreaker
-from src.core.di_container import Container
-from src.core.service_manager import ServiceManager
-from src.monitoring.heartbeat import HeartbeatMonitor
-from prometheus_client import Counter, Histogram, Gauge
-from src.utils.async_limiter import AsyncRateLimiter
-from src.utils.error_handler import ErrorHandler
 import time
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Set, Dict, Any, List, Tuple
+
+from discord.ext import commands
+
+from src.core.di_container import Container
+
+
+from prometheus_client import Counter, Histogram, Gauge
+
+# from src.utils.error_handler import ErrorHandler
+from src.utils.error_handler import ErrorHandler
+from src.core.config import Settings  # Import Settings
+from dependency_injector.wiring import inject, Provide
+from src.utils.performance import measure_latency
+import discord
+
 
 logger = logging.getLogger(__name__)
+
 
 class MediaStreamingBot(commands.Bot):
     """
     Custom Discord bot for media streaming.
     """
-    def __init__(self, config: Config):
-        intents = discord.Intents.default()
+    @inject
+    def __init__(
+        self,
+        *args,
+        settings: Settings = Provide[Container.settings],
+        **kwargs
+,
+    ) -> None:
+        intents = discord.Intents.all()
         intents.message_content = True
         super().__init__(
-            command_prefix="!",
+            command_prefix=settings.COMMAND_PREFIX,
             intents=intents,
             heartbeat_timeout=60.0,
             activity=discord.Activity(type=discord.ActivityType.watching, name="media streams")
         )
-        self.config = config
-        # Initialize core services
-        self.redis_manager = None
-        self.queue_manager = None
-        self.ffmpeg_manager = FFmpegManager()  # assumes a proper implementation exists
-        self.plex_server = None
-        self.rate_limiter = RateLimiter(
-            config.RATE_LIMIT_REQUESTS,
-            config.RATE_LIMIT_PERIOD
-        )
-        self.active_streams = None
+        self.settings = settings
         self._shutdown_event = asyncio.Event()
-        self.health_check = HealthCheck()
-        self.circuit_breaker = CircuitBreaker(
-            failure_threshold=config.CIRCUIT_BREAKER_THRESHOLD,
-            reset_timeout=config.CIRCUIT_BREAKER_TIMEOUT
-        )
-        self.container = None
-        self.service_manager = ServiceManager()
-        self.heartbeat = HeartbeatMonitor()
+        
+        
         self._command_latency = Histogram(
             'command_latency_seconds',
             'Command execution latency',
@@ -81,16 +71,20 @@ class MediaStreamingBot(commands.Bot):
             period=60.0,
             burst_size=20
         )
+#         self._error_handler = ErrorHandler(
+#             max_retries=3,
+#             backoff_factor=1.5
+#         )
         self._error_handler = ErrorHandler(
             max_retries=3,
             backoff_factor=1.5
         )
-        self._command_queue = asyncio.Queue()
-        self._command_workers = []
+        self._command_queue: asyncio.Queue[Tuple[str, commands.Context]] = asyncio.Queue()
+        self._command_workers: List[asyncio.Task] = []
         self._max_concurrent_commands = 5
         self._command_semaphore = asyncio.Semaphore(10)
-        self._cleanup_tasks: Set[asyncio.Task] = set()
-        self._command_timeouts = {}
+        self._cleanup_tasks: Set[asyncio.Task[Any]] = set()
+        self._command_timeouts: Dict[str, float] = {}
 
     @asynccontextmanager
     async def graceful_shutdown(self) -> AsyncIterator[None]:
@@ -98,7 +92,7 @@ class MediaStreamingBot(commands.Bot):
             yield
         finally:
             self._shutdown_event.set()
-            cleanup_timeout = self.config.GRACEFUL_SHUTDOWN_TIMEOUT
+            cleanup_timeout = self.settings.GRACEFUL_SHUTDOWN_TIMEOUT  # Access via settings
             try:
                 await asyncio.wait_for(self._cleanup(), timeout=cleanup_timeout)
             except asyncio.TimeoutError:
@@ -130,29 +124,25 @@ class MediaStreamingBot(commands.Bot):
                 self._command_workers.append(worker)
             
             # Initialize dependency container and services
-            self.redis_manager = await provide_redis_manager(self.config)
-            self.plex_server = await provide_plex_server(self.config)
-            self.active_streams = provide_active_streams()
-
-            self.container = Container()
-            self.container.config.override(self.config)
-            self.container.wire(modules=[__name__, "src.cogs.media_commands"])
+            container = Container()
+            container.config.from_pydantic(self.settings)  # Use Pydantic settings
+            container.wire(modules=[__name__, "src.cogs.media_commands"])
 
             # Register services with proper dependencies
-            await self.service_manager.register("redis", self.redis_manager)
-            await self.service_manager.register("ffmpeg", self.ffmpeg_manager, {"redis"})
-            await self.service_manager.register("queue", self.container.queue_manager(), {"redis"})
-            await self.service_manager.register("plex", self.plex_server)
+            
+            
+            
+            
 
             # Register heartbeats and health checks
-            self.heartbeat.register("redis", self._check_redis_health)
-            self.heartbeat.register("ffmpeg", self._check_ffmpeg_health)
-            self.heartbeat.register("plex", self._check_plex_health)
+            
+            
+            
 
-            await self.service_manager.start_services()
-            await self.heartbeat.start()
+            
+            
 
-            await self.add_cog(MediaCommands(self))
+            await self.add_cog(container.media_commands())
             logger.info("Bot setup complete.")
 
             # Register signal handlers
@@ -176,6 +166,7 @@ class MediaStreamingBot(commands.Bot):
         while True:
             cmd, ctx = await self._command_queue.get()
             try:
+#             async with self._error_handler.handle_errors():
                 async with self._error_handler.handle_errors():
                     await self._execute_command(cmd, ctx)
             except Exception as e:
@@ -193,7 +184,7 @@ class MediaStreamingBot(commands.Bot):
                 await self._check_health()
             except Exception as e:
                 logger.error(f"Health check failed: {e}")
-            await asyncio.sleep(self.config.HEALTH_CHECK_INTERVAL)
+            await asyncio.sleep(self.settings.HEALTH_CHECK_INTERVAL)
 
     @measure_latency("health_check")
     async def _check_health(self) -> None:
@@ -201,17 +192,17 @@ class MediaStreamingBot(commands.Bot):
 
     async def _check_redis_health(self) -> bool:
         try:
-            await self.redis_manager.redis.ping()
+            await self.container.redis_manager().redis.ping()
             return True
         except Exception:
             return False
 
     async def _check_ffmpeg_health(self) -> bool:
-        return len(self.ffmpeg_manager.active_processes) < self.config.MAX_CONCURRENT_STREAMS
+        return len(self.container.ffmpeg_manager().active_processes) < self.settings.MAX_CONCURRENT_STREAMS  # Use settings
 
     async def _check_plex_health(self) -> bool:
         try:
-            await self.plex_server.ping()
+            await self.container.plex_manager().server.ping()
             return True
         except Exception:
             return False
@@ -222,13 +213,13 @@ class MediaStreamingBot(commands.Bot):
                 await self._check_health()
             except Exception as e:
                 logger.error(f"Health check failed: {e}")
-            await asyncio.sleep(self.config.HEALTH_CHECK_INTERVAL)
+            await asyncio.sleep(self.settings.HEALTH_CHECK_INTERVAL)  # Use settings
 
     async def close(self) -> None:
-        if self.redis_manager:
-            await self.redis_manager.close()
-        if self.active_streams:
-            self.active_streams.decrement()
+        if self.container and self.container.redis_manager():
+            await self.container.redis_manager().close()
+        if self.container and self.container.active_streams():
+            self.container.active_streams().decrement()
         await super().close()
         logger.info("Bot shutdown complete.")
 
@@ -271,7 +262,7 @@ class MediaStreamingBot(commands.Bot):
                 return
                 
             try:
-                self._command_timeouts[cmd_key] = time.time() + self.config.COMMAND_COOLDOWN
+                self._command_timeouts[cmd_key] = time.time() + self.settings.COMMAND_COOLDOWN
                 await super().process_commands(message)
             except Exception as e:
                 logger.error(f"Command processing error: {e}", exc_info=True)
@@ -282,7 +273,7 @@ class MediaStreamingBot(commands.Bot):
         """Executes a command, handling rate limits and command-specific logic."""
         try:
             # Apply global rate limit
-            async with self._command_limiter:
+            
                 # Execute the command
                 await ctx.invoke(cmd)
         except commands.CommandNotFound:

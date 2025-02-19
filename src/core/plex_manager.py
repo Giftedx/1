@@ -8,7 +8,7 @@ from plexapi.exceptions import NotFound, Unauthorized
 from tenacity import retry, stop_after_attempt, wait_exponential
 from src.core.exceptions import MediaNotFoundError, StreamingError
 from src.utils.config import settings
-from src.monitoring.metrics import PLEX_REQUEST_DURATION, plex_metrics
+from src.monitoring.metrics import plex_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,8 @@ class PlexManager:
                     await self._connect()
         return self._server
 
-    @PLEX_REQUEST_DURATION.time()
     @lru_cache(maxsize=100)
+    @plex_metrics.request_duration.time()
     async def search_media(self, title: str) -> List[Video]:
         """Searches for media items in the Plex library."""
         try:
@@ -62,7 +62,7 @@ class PlexManager:
             logger.error(f"Plex search failed: {e}", exc_info=True)
             raise
 
-    @PLEX_REQUEST_DURATION.time()
+    @plex_metrics.request_duration.time()
     async def get_stream_url(self, media_item: Video) -> str:
         """Gets the stream URL for a media item."""
         try:

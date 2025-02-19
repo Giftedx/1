@@ -5,3 +5,4 @@ pytest
 coverage
 black
 isort
+pytest-cov

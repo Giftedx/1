@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from src.metrics import ACTIVE_STREAMS, STREAM_QUALITY
-from src.core.metrics_manager import MetricsManager
+
 from src.core.tautulli_client import TautulliClient
 from src.ui.widgets import ActivityFeedWidget
 
@@ -16,7 +16,7 @@ app = FastAPI()
 templates = Jinja2Templates(directory="src/ui/templates")
 
 app.mount("/static", StaticFiles(directory="src/ui/static"), name="static")
-metrics_manager = MetricsManager()
+
 
 # Initialize Tautulli client
 tautulli = TautulliClient(
@@ -122,3 +122,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
+

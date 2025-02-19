@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 from .base_widget import BaseWidget, WidgetConfig
-from ...core.plex import PlexClient
+from ...core.plex_manager import PlexManager as PlexClient
 import asyncio
 from datetime import datetime
 

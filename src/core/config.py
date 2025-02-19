@@ -1,7 +1,8 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from pydantic import BaseSettings, validator
+from pydantic import validator
+from pydantic_settings import BaseSettings
 
 
 class Environment(str, Enum):
@@ -51,8 +52,10 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
 
-    @validator("STREAMING_BOT_TOKEN")
-    def validate_streaming_bot_token(cls, v, values):
+    @validator("STREAMING_BOT_TOKEN", pre=True)  # Added indentation
+    # Added indentation
+    # Added type annotation
+    def validate_streaming_bot_token(cls, v: Optional[str], values: Dict[str, Any]) -> Optional[str]:
         if values.get("SERVICE_MODE") == ServiceMode.SELFBOT and not v:
             raise ValueError(
                 "STREAMING_BOT_TOKEN is required when SERVICE_MODE is set to selfbot"

@@ -5,11 +5,11 @@ multi_line_output = 3
 
 [tool.black]
 line-length = 120
-target-version = ['py39']]
+target-version = ['py39']
 include = '\.pyi?$'
 
 [tool.mypy]
-python_version = "3.11""
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -18,25 +18,14 @@ check_untyped_defs = true
 [tool.flake8]
 max-line-length = 120
 exclude = ['.venv', '.git', '__pycache__', 'docs', 'build', 'dist']
+extend-ignore = ["E203", "W503"] # Corrected line 21
 
 [tool.coverage.run]
 branch = true
-
-
-
-
-
-
-
-
-
-
-
-
-addopts = "-ra -q --cov=src --cov-report term-missing"python_files = "test_*.py"testpaths = ["tests"]asyncio_mode = "auto"[tool.pytest.ini_options]show_missing = truefail_under = 80[tool.coverage.report]source = ["src"][tool.flake8]
-max-line-length = 120
-extend-ignore = E203, W503
-
-[tool.coverage.run]
-branch = True
 source = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -q --cov=src --cov-report term-missing"
+python_files = "test_*.py"
+testpaths = ["tests"]
+asyncio_mode = "auto"

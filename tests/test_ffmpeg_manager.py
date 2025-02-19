@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 import asyncio
 from unittest.mock import patch, Mock, AsyncMock
@@ -6,9 +8,11 @@ from src.core.exceptions import StreamingError
 
 @pytest.fixture
 def ffmpeg_manager():
-    with patch('subprocess.run') as mock_run:
-        mock_run.return_value.returncode = 0
-        yield FFmpegManager()
+  # Use a fake path since subprocess.run is mocked
+  with patch('subprocess.run') as mock_run:
+    mock_run.return_value = Mock(returncode=0, stdout="FFmpeg version 1.2.3\n")
+    yield FFmpegManager(ffmpeg_path="fake_path")
+
 
 @pytest.fixture
 def mock_process():

@@ -7,11 +7,12 @@ from src.core.ffmpeg_manager import FFmpegManager
 from src.core.queue_manager import QueueManager
 from src.monitoring.alerts import PrometheusAlerts
 
+
 class Container(containers.DeclarativeContainer):
     wiring_config = containers.WiringConfiguration(modules=[
         "src.bot.discord_bot",  # Example: Wire the Discord bot module
-        "src.cogs.media_commands", # Example: Wire the Media Commands cog
-        "src.selfbot.selfbot" # Example: Wire the Selfbot
+        "src.cogs.media_commands",  # Example: Wire the Media Commands cog
+        "src.selfbot.selfbot"  # Example: Wire the Selfbot
     ])
 
     config = providers.Configuration()
@@ -48,14 +49,3 @@ class Container(containers.DeclarativeContainer):
         PrometheusAlerts,
         alert_config=settings.provided.ALERT_CONFIG
     )
-
-class DIContainer:
-    _services = {}
-
-    @classmethod
-    def register(cls, key: str, service) -> None:
-        cls._services[key] = service
-
-    @classmethod
-    def resolve(cls, key: str):
-        return cls._services.get(key)
