@@ -1,4 +1,4 @@
-# Media Bot Production-Grade System
+# Media Bot Production-grade System
 
 ## Overview
 
